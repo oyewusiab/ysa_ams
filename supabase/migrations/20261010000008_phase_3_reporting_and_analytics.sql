@@ -27,6 +27,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_activity_sessions_month_year 
     ON public.activity_sessions(EXTRACT(YEAR FROM session_date), EXTRACT(MONTH FROM session_date));
 
+CREATE INDEX IF NOT EXISTS idx_activity_sessions_status_date
+    ON public.activity_sessions(status, session_date);
+
 CREATE INDEX IF NOT EXISTS idx_attendance_records_composite_reporting 
     ON public.attendance_records(recorded_unit_id, session_id, member_id);
 
@@ -35,7 +38,13 @@ CREATE INDEX IF NOT EXISTS idx_members_home_unit_active
 
 --------------------------------------------------------------------------------
 -- 3. FUNCTION: get_monthly_attendance_register
--- Aggregates eligible finalized/provisional sessions for a given year, month and unit
+-- Aggregates eligible finalized sessions for a given year, month, and unit scope.
+-- Strict rules:
+--   - Only 'closed' sessions are finalized attendance opportunities.
+--   - 'all_ysa': if participating_units is NULL or empty, all units; otherwise home_unit_id must be in participating_units.
+--   - 'specific_units': home_unit_id must be in participating_units.
+--   - 'custom_enrolled': member_id must exist in session_enrolled_members.
+--   - Percentage is NULL if total_eligible is 0 (prevents division by zero or misleading 0%).
 --------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_monthly_attendance_register(
     p_year INT,
@@ -101,7 +110,7 @@ BEGIN
         CROSS JOIN eligible_sessions es
         WHERE 
             -- Rule 1: all_ysa
-            (es.eligibility_rule = 'all_ysa' AND (es.participating_units IS NULL OR um.m_unit_id = ANY(es.participating_units)))
+            (es.eligibility_rule = 'all_ysa' AND (es.participating_units IS NULL OR cardinality(es.participating_units) = 0 OR um.m_unit_id = ANY(es.participating_units)))
             -- Rule 2: specific_units
             OR (es.eligibility_rule = 'specific_units' AND (es.participating_units IS NOT NULL AND um.m_unit_id = ANY(es.participating_units)))
             -- Rule 3: custom_enrolled
@@ -111,19 +120,20 @@ BEGIN
     ),
     member_stats AS (
         SELECT 
-            me.m_id,
-            me.m_name,
-            me.m_unit_id,
-            me.u_name,
-            me.u_type,
+            um.m_id,
+            um.m_name,
+            um.m_unit_id,
+            um.u_name,
+            um.u_type,
             COUNT(DISTINCT me.session_id) AS total_eligible,
             COUNT(DISTINCT CASE WHEN ar.attendance_status = 'present' THEN me.session_id END) AS total_attended,
             COUNT(DISTINCT CASE WHEN ar.attendance_status = 'excused' THEN me.session_id END) AS total_excused
-        FROM member_eligibility me
+        FROM unit_members um
+        LEFT JOIN member_eligibility me ON me.m_id = um.m_id
         LEFT JOIN public.attendance_records ar 
             ON ar.session_id = me.session_id 
            AND ar.member_id = me.m_id
-        GROUP BY me.m_id, me.m_name, me.m_unit_id, me.u_name, me.u_type
+        GROUP BY um.m_id, um.m_name, um.m_unit_id, um.u_name, um.u_type
     )
     SELECT 
         ms.m_id,
@@ -138,7 +148,7 @@ BEGIN
         CASE 
             WHEN ms.total_eligible > 0 THEN 
                 ROUND(((ms.total_attended::NUMERIC / ms.total_eligible::NUMERIC) * 100.0), 1)
-            ELSE 0.0 
+            ELSE NULL 
         END AS attendance_percentage
     FROM member_stats ms
     ORDER BY ms.u_name ASC, ms.m_name ASC;
@@ -150,7 +160,7 @@ GRANT EXECUTE ON FUNCTION public.get_monthly_attendance_register(INT, INT, UUID)
 
 --------------------------------------------------------------------------------
 -- 4. FUNCTION: get_stake_analytics_summary
--- Stake presidency and Admin high-level metrics for dashboard & analytics
+-- Stake presidency and Admin high-level metrics with fair sum of eligible opportunities
 --------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.get_stake_analytics_summary(
     p_year INT,
@@ -173,13 +183,13 @@ BEGIN
     END IF;
 
     WITH period_sessions AS (
-        SELECT id, status, session_date
-        FROM public.activity_sessions
-        WHERE EXTRACT(YEAR FROM session_date) = p_year
-          AND EXTRACT(MONTH FROM session_date) = p_month
+        SELECT s.id, s.status, s.session_date, s.participating_units, s.eligibility_rule
+        FROM public.activity_sessions s
+        WHERE EXTRACT(YEAR FROM s.session_date) = p_year
+          AND EXTRACT(MONTH FROM s.session_date) = p_month
     ),
     closed_sessions AS (
-        SELECT id FROM period_sessions WHERE status = 'closed'
+        SELECT id, participating_units, eligibility_rule FROM period_sessions WHERE status = 'closed'
     ),
     pending_sessions AS (
         SELECT id FROM period_sessions WHERE status IN ('active', 'draft')
@@ -194,6 +204,21 @@ BEGIN
     ),
     active_members AS (
         SELECT id, home_unit_id FROM public.members WHERE is_active = TRUE
+    ),
+    -- Calculate exact eligible member opportunities for closed sessions
+    eligible_pairs AS (
+        SELECT m.id AS member_id, cs.id AS session_id
+        FROM active_members m
+        CROSS JOIN closed_sessions cs
+        WHERE 
+            (cs.eligibility_rule = 'all_ysa' AND (cs.participating_units IS NULL OR cardinality(cs.participating_units) = 0 OR m.home_unit_id = ANY(cs.participating_units)))
+            OR (cs.eligibility_rule = 'specific_units' AND (cs.participating_units IS NOT NULL AND m.home_unit_id = ANY(cs.participating_units)))
+            OR (cs.eligibility_rule = 'custom_enrolled' AND EXISTS (
+                SELECT 1 FROM public.session_enrolled_members sem WHERE sem.session_id = cs.id AND sem.member_id = m.id
+            ))
+    ),
+    total_eligible_count AS (
+        SELECT COUNT(*) AS count FROM eligible_pairs
     ),
     reopening_requests_count AS (
         SELECT COUNT(*) AS count
@@ -213,8 +238,19 @@ BEGIN
         'active_units_count', (SELECT COUNT(*) FROM active_units),
         'finalized_sessions_count', (SELECT COUNT(*) FROM closed_sessions),
         'pending_sessions_count', (SELECT COUNT(*) FROM pending_sessions),
+        'total_eligible_opportunities', (SELECT count FROM total_eligible_count),
         'total_attendance_instances', (SELECT COUNT(*) FROM period_attendance WHERE attendance_status = 'present'),
         'total_excused_instances', (SELECT COUNT(*) FROM period_attendance WHERE attendance_status = 'excused'),
+        'overall_attendance_percentage', (
+            SELECT CASE 
+                WHEN tec.count > 0 THEN 
+                    ROUND(((COUNT(pa.id)::NUMERIC / tec.count::NUMERIC) * 100.0), 1)
+                ELSE NULL 
+            END
+            FROM total_eligible_count tec
+            LEFT JOIN period_attendance pa ON pa.attendance_status = 'present'
+            GROUP BY tec.count
+        ),
         'pending_reopening_requests', (SELECT count FROM reopening_requests_count),
         'attendance_corrections_count', (SELECT count FROM corrections_count)
     ) INTO v_result;

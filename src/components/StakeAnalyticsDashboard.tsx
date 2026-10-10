@@ -11,7 +11,8 @@ import {
   Download, 
   Printer, 
   RefreshCw, 
-  RotateCcw
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react'
 
 export const StakeAnalyticsDashboard: React.FC = () => {
@@ -19,6 +20,7 @@ export const StakeAnalyticsDashboard: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<number>(() => new Date().getMonth() + 1)
   const [analytics, setAnalytics] = useState<StakeAnalyticsSummary | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -26,18 +28,21 @@ export const StakeAnalyticsDashboard: React.FC = () => {
   ]
   const periodLabel = `${monthNames[selectedMonth - 1]} ${selectedYear}`
 
-  useEffect(() => {
-    async function loadData() {
-      setLoading(true)
-      try {
-        const data = await fetchStakeAnalytics(selectedYear, selectedMonth)
-        setAnalytics(data)
-      } catch (err) {
-        console.error('Failed to load stake analytics:', err)
-      } finally {
-        setLoading(false)
-      }
+  async function loadData() {
+    setLoading(true)
+    setErrorMsg(null)
+    try {
+      const data = await fetchStakeAnalytics(selectedYear, selectedMonth)
+      setAnalytics(data)
+    } catch (err: unknown) {
+      console.error('Failed to load stake analytics:', err)
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to load stake analytics from database.')
+    } finally {
+      setLoading(false)
     }
+  }
+
+  useEffect(() => {
     loadData()
   }, [selectedYear, selectedMonth])
 
@@ -56,7 +61,7 @@ export const StakeAnalyticsDashboard: React.FC = () => {
         'Registered YSA': analytics.total_registered_ysa,
         'Active Units': analytics.active_units_count,
         'Finalized Activities': analytics.finalized_sessions_count,
-        'Stake Attendance Rate': `${analytics.overall_attendance_percentage}%`
+        'Stake Attendance Rate': analytics.overall_attendance_percentage !== null ? `${analytics.overall_attendance_percentage}%` : 'N/A'
       },
       headers: ['Ward / Branch', 'Unit Type', 'Registered YSA', 'Finalized Activities', 'Attendance Count', 'Rate %', 'Zero Attended'],
       rows: analytics.unit_breakdown.map(u => [
@@ -65,7 +70,7 @@ export const StakeAnalyticsDashboard: React.FC = () => {
         u.registered_ysa_count,
         u.finalized_sessions_count,
         u.attendance_count,
-        `${u.attendance_percentage}%`,
+        u.attendance_percentage !== null ? `${u.attendance_percentage}%` : 'N/A',
         u.zero_attendance_count
       ]),
       summaryFooter: `Total Attendance: ${analytics.total_attendance_instances} • Pending Sessions: ${analytics.pending_sessions_count} • Reopenings: ${analytics.pending_reopening_requests} • Audit Corrections: ${analytics.attendance_corrections_count}`
@@ -141,6 +146,25 @@ export const StakeAnalyticsDashboard: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner with Retry */}
+      {errorMsg && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-start justify-between gap-3 text-rose-800">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="font-bold text-sm">Failed to Load Stake Analytics</h4>
+              <p className="text-xs text-rose-700 mt-0.5">{errorMsg}</p>
+            </div>
+          </div>
+          <button
+            onClick={loadData}
+            className="shrink-0 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition shadow-xs"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-500 text-sm shadow-xs">
           <RefreshCw className="w-6 h-6 animate-spin mx-auto text-emerald-600 mb-2" />
@@ -168,7 +192,9 @@ export const StakeAnalyticsDashboard: React.FC = () => {
                 <span className="text-xs font-semibold uppercase tracking-wider">Stake Attendance Rate</span>
                 <TrendingUp className="w-4 h-4 text-emerald-600" />
               </div>
-              <div className="text-2xl font-black text-emerald-700">{analytics.overall_attendance_percentage}%</div>
+              <div className="text-2xl font-black text-emerald-700">
+                {analytics.overall_attendance_percentage !== null ? `${analytics.overall_attendance_percentage}%` : 'N/A'}
+              </div>
               <div className="text-[11px] text-emerald-600 mt-1">
                 {analytics.total_attendance_instances} check-ins • {analytics.total_excused_instances} excused
               </div>
@@ -236,25 +262,29 @@ export const StakeAnalyticsDashboard: React.FC = () => {
                         <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
                           <div
                             className={`h-2.5 rounded-full ${
-                              u.attendance_percentage >= 70
+                              u.attendance_percentage === null
+                                ? 'bg-slate-300'
+                                : u.attendance_percentage >= 70
                                 ? 'bg-emerald-600'
                                 : u.attendance_percentage >= 40
                                 ? 'bg-amber-500'
                                 : 'bg-rose-500'
                             }`}
-                            style={{ width: `${Math.min(100, u.attendance_percentage)}%` }}
+                            style={{ width: `${u.attendance_percentage !== null ? Math.min(100, u.attendance_percentage) : 0}%` }}
                           />
                         </div>
                       </td>
                       <td className="py-3 px-3 text-center">
                         <span className={`inline-block px-2 py-0.5 rounded font-black ${
-                          u.attendance_percentage >= 70
+                          u.attendance_percentage === null
+                            ? 'bg-slate-100 text-slate-500'
+                            : u.attendance_percentage >= 70
                             ? 'bg-emerald-100 text-emerald-800'
                             : u.attendance_percentage >= 40
                             ? 'bg-amber-100 text-amber-800'
                             : 'bg-rose-100 text-rose-800'
                         }`}>
-                          {u.attendance_percentage}%
+                          {u.attendance_percentage !== null ? `${u.attendance_percentage}%` : 'N/A'}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-center">

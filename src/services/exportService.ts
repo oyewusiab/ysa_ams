@@ -36,6 +36,29 @@ function downloadFile(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * Format activity status for clean human readability in exports
+ */
+export function formatExportStatus(status: string | undefined): string {
+  switch (status) {
+    case 'present': return 'PRESENT'
+    case 'excused': return 'EXCUSED'
+    case 'absent': return 'ABSENT'
+    case 'unfinalized_recorded': return 'RECORDED (PROVISIONAL)'
+    case 'unfinalized_unrecorded': return 'UNRECORDED (PROVISIONAL)'
+    case 'ineligible': return 'INELIGIBLE'
+    default: return '—'
+  }
+}
+
+/**
+ * Helper to display percentage or N/A
+ */
+export function formatExportPercentage(pct: number | null | undefined): string {
+  if (pct === null || pct === undefined) return 'N/A'
+  return `${pct}%`
+}
+
 // -----------------------------------------------------------------------------
 // 1. CSV EXPORTERS
 // -----------------------------------------------------------------------------
@@ -45,25 +68,29 @@ export function exportRegisterToCsv(data: RegisterExportData, filename = 'YSA_At
     'Member Full Name',
     'Ward / Branch',
     'Unit Type',
-    'Eligible Opportunities',
+    'Eligible Finalized Opportunities',
     'Attended',
     'Excused',
-    'Absent',
-    'Attendance %',
-    ...data.sessions.map(s => `${s.session_title} (${s.session_date})`)
+    'Confirmed Absences',
+    'Attendance Rate %',
+    ...data.sessions.map(s => {
+      const statusNote = s.status === 'closed' ? 'Finalized' : 'Provisional'
+      return `${s.session_title} (${s.session_date}) [${statusNote}]`
+    })
   ]
 
   const lines: string[] = []
   lines.push(`"Abeokuta Nigeria Obantoko Stake — YSA Attendance Register"`)
   lines.push(`"Reporting Period: ${data.periodLabel}"`)
+  lines.push(`"Timezone: Africa/Lagos (WAT)"`)
   lines.push(`"Export Timestamp: ${new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' })} WAT"`)
   lines.push('') // Blank line
   lines.push(headers.map(escapeCsvCell).join(','))
 
   for (const row of data.rows) {
     const sessionStatuses = data.sessions.map(s => {
-      const st = row.activity_statuses[s.id] || 'ineligible'
-      return st.toUpperCase()
+      const st = row.activity_statuses[s.id]
+      return formatExportStatus(st)
     })
 
     const rowValues = [
@@ -74,7 +101,7 @@ export function exportRegisterToCsv(data: RegisterExportData, filename = 'YSA_At
       row.attended_count,
       row.excused_count,
       row.absent_count,
-      `${row.attendance_percentage}%`,
+      formatExportPercentage(row.attendance_percentage),
       ...sessionStatuses
     ]
     lines.push(rowValues.map(escapeCsvCell).join(','))
@@ -89,16 +116,16 @@ export function exportUnitReportToCsv(report: UnitMonthlyReport, filename = 'Uni
   const lines: string[] = []
   lines.push(`"Abeokuta Nigeria Obantoko Stake — Unit Attendance Summary"`)
   lines.push(`"Unit: ${report.unit_name} (${report.unit_type.toUpperCase()})"`)
-  lines.push(`"Overall Attendance Rate: ${report.overall_attendance_percentage}%"`)
+  lines.push(`"Overall Attendance Rate: ${formatExportPercentage(report.overall_attendance_percentage)}"`)
   lines.push(`"Total Registered YSA: ${report.registered_ysa_count}"`)
-  lines.push(`"Total Eligible Finalized Activities: ${report.eligible_sessions_count}"`)
+  lines.push(`"Total Finalized Activities in Period: ${report.eligible_sessions_count}"`)
   lines.push(`"Total Attended Instances: ${report.total_attendance_instances}"`)
-  lines.push(`"Total Absences: ${report.total_absences}"`)
+  lines.push(`"Total Confirmed Absences: ${report.total_absences}"`)
   lines.push(`"Total Excused Absences: ${report.total_excused}"`)
-  lines.push(`"Previous Month Rate: ${report.previous_month_percentage !== null ? `${report.previous_month_percentage}%` : 'N/A'}"`)
+  lines.push(`"Previous Month Rate: ${formatExportPercentage(report.previous_month_percentage)}"`)
   lines.push('')
   lines.push('"Individual Member Performance"')
-  lines.push(['Full Name', 'Eligible Activities', 'Attended', 'Excused', 'Absent', 'Attendance %'].map(escapeCsvCell).join(','))
+  lines.push(['Full Name', 'Eligible Finalized Activities', 'Attended', 'Excused', 'Confirmed Absent', 'Attendance Rate %'].map(escapeCsvCell).join(','))
 
   for (const row of report.member_rows) {
     lines.push([
@@ -107,7 +134,7 @@ export function exportUnitReportToCsv(report: UnitMonthlyReport, filename = 'Uni
       row.attended_count,
       row.excused_count,
       row.absent_count,
-      `${row.attendance_percentage}%`
+      formatExportPercentage(row.attendance_percentage)
     ].map(escapeCsvCell).join(','))
   }
 
@@ -128,11 +155,12 @@ export function exportRegisterToXlsx(data: RegisterExportData, filename = 'YSA_A
     ['Abeokuta Nigeria Obantoko Stake — YSA Attendance Register'],
     ['Reporting Period', data.periodLabel],
     ['Total Registered YSA', data.rows.length],
-    ['Total Finalized Activities', data.sessions.length],
+    ['Total Activities Displayed', data.sessions.length],
     ['Timezone', 'Africa/Lagos (WAT)'],
     ['Exported At', new Date().toLocaleString('en-GB', { timeZone: 'Africa/Lagos' })],
     [],
-    ['Note: This official register is generated by the Obantoko Stake YSA AMS.']
+    ['Note: Only finalized (closed) sessions generate confirmed absences and factor into attendance percentages.'],
+    ['Unfinalized (active/draft) sessions show provisional check-ins and do not count toward official missed opportunities.']
   ]
   const wsSummary = XLSX.utils.aoa_to_sheet(summaryData)
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary')
@@ -142,18 +170,21 @@ export function exportRegisterToXlsx(data: RegisterExportData, filename = 'YSA_A
     'Member Full Name',
     'Ward / Branch',
     'Unit Type',
-    'Eligible Opportunities',
+    'Eligible Finalized Opportunities',
     'Attended',
     'Excused',
-    'Absent',
+    'Confirmed Absences',
     'Attendance %',
-    ...data.sessions.map(s => `${s.session_title} (${s.session_date})`)
+    ...data.sessions.map(s => {
+      const statusNote = s.status === 'closed' ? 'Finalized' : 'Provisional'
+      return `${s.session_title} (${s.session_date}) [${statusNote}]`
+    })
   ]
 
   const gridRows = data.rows.map(row => {
     const sessionStatuses = data.sessions.map(s => {
-      const st = row.activity_statuses[s.id] || 'ineligible'
-      return st.toUpperCase()
+      const st = row.activity_statuses[s.id]
+      return formatExportStatus(st)
     })
     return [
       row.full_name,
@@ -163,7 +194,7 @@ export function exportRegisterToXlsx(data: RegisterExportData, filename = 'YSA_A
       row.attended_count,
       row.excused_count,
       row.absent_count,
-      row.attendance_percentage / 100, // as decimal for percentage formatting
+      row.attendance_percentage !== null ? row.attendance_percentage / 100 : 'N/A',
       ...sessionStatuses
     ]
   })
@@ -171,7 +202,6 @@ export function exportRegisterToXlsx(data: RegisterExportData, filename = 'YSA_A
   const wsRegister = XLSX.utils.aoa_to_sheet([headers, ...gridRows])
   XLSX.utils.book_append_sheet(wb, wsRegister, 'Monthly Register')
 
-  // Write file
   XLSX.writeFile(wb, filename)
 }
 
@@ -189,8 +219,8 @@ export function exportStakeAnalyticsToXlsx(analytics: StakeAnalyticsSummary, fil
     ['Pending / Unfinalized Sessions', analytics.pending_sessions_count],
     ['Total Attendances', analytics.total_attendance_instances],
     ['Total Excused Absences', analytics.total_excused_instances],
-    ['Overall Attendance Rate', `${analytics.overall_attendance_percentage}%`],
-    ['Previous Month Rate', analytics.previous_month_overall_percentage !== null ? `${analytics.previous_month_overall_percentage}%` : 'N/A'],
+    ['Overall Attendance Rate', formatExportPercentage(analytics.overall_attendance_percentage)],
+    ['Previous Month Rate', formatExportPercentage(analytics.previous_month_overall_percentage)],
     ['Pending Reopening Requests', analytics.pending_reopening_requests],
     ['Attendance Corrections Audited', analytics.attendance_corrections_count]
   ]
@@ -213,7 +243,7 @@ export function exportStakeAnalyticsToXlsx(analytics: StakeAnalyticsSummary, fil
     u.registered_ysa_count,
     u.finalized_sessions_count,
     u.attendance_count,
-    u.attendance_percentage / 100,
+    u.attendance_percentage !== null ? u.attendance_percentage / 100 : 'N/A',
     u.zero_attendance_count
   ])
   const wsUnits = XLSX.utils.aoa_to_sheet([unitHeaders, ...unitRows])
@@ -226,7 +256,7 @@ export function exportStakeAnalyticsToXlsx(analytics: StakeAnalyticsSummary, fil
     t.year,
     t.attendance_count,
     t.finalized_sessions_count,
-    t.attendance_percentage / 100
+    t.attendance_percentage !== null ? t.attendance_percentage / 100 : 'N/A'
   ])
   const wsTrends = XLSX.utils.aoa_to_sheet([trendHeaders, ...trendRows])
   XLSX.utils.book_append_sheet(wb, wsTrends, 'Trends')

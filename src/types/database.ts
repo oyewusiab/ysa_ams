@@ -197,6 +197,14 @@ export interface AttendanceRecord {
 // Phase 3 Types: Reporting, Registers, Unit Summaries & Analytics
 // -----------------------------------------------------------------------------
 
+export type ActivityCellAttendanceStatus = 
+  | 'present' 
+  | 'excused' 
+  | 'absent' 
+  | 'unfinalized_recorded' 
+  | 'unfinalized_unrecorded' 
+  | 'ineligible'
+
 export interface MonthlyRegisterMemberRow {
   member_id: string
   full_name: string
@@ -208,8 +216,8 @@ export interface MonthlyRegisterMemberRow {
   attended_count: number
   excused_count: number
   absent_count: number
-  attendance_percentage: number
-  activity_statuses: Record<string, 'present' | 'excused' | 'absent' | 'ineligible'>
+  attendance_percentage: number | null
+  activity_statuses: Record<string, ActivityCellAttendanceStatus>
 }
 
 export interface UnitMonthlyReport {
@@ -221,7 +229,7 @@ export interface UnitMonthlyReport {
   total_attendance_instances: number
   total_absences: number
   total_excused: number
-  overall_attendance_percentage: number
+  overall_attendance_percentage: number | null
   previous_month_percentage: number | null
   percentage_change: number | null
   zero_attendance_members: { id: string; full_name: string }[]
@@ -238,7 +246,7 @@ export interface StakeAnalyticsSummary {
   pending_sessions_count: number
   total_attendance_instances: number
   total_excused_instances: number
-  overall_attendance_percentage: number
+  overall_attendance_percentage: number | null
   previous_month_overall_percentage: number | null
   pending_reopening_requests: number
   attendance_corrections_count: number
@@ -249,7 +257,7 @@ export interface StakeAnalyticsSummary {
     registered_ysa_count: number
     finalized_sessions_count: number
     attendance_count: number
-    attendance_percentage: number
+    attendance_percentage: number | null
     zero_attendance_count: number
   }[]
   monthly_trends: {
@@ -258,7 +266,7 @@ export interface StakeAnalyticsSummary {
     month: number
     attendance_count: number
     finalized_sessions_count: number
-    attendance_percentage: number
+    attendance_percentage: number | null
   }[]
   category_breakdown: {
     category: ActivityCategory
@@ -273,7 +281,7 @@ export interface MemberAttendanceHistoryItem {
   session_date: string
   category: ActivityCategory
   status: SessionStatus // 'draft' | 'active' | 'closed'
-  attendance_status: 'present' | 'excused' | 'absent'
+  attendance_status: 'present' | 'excused' | 'absent' | 'unfinalized_recorded' | 'unfinalized_unrecorded'
   recorded_unit_name: string
   recorded_unit_type: string
   check_in_time: string | null
@@ -285,7 +293,7 @@ export interface MemberAttendanceProfile {
   total_attended: number
   total_excused: number
   total_absent: number
-  overall_percentage: number
+  overall_percentage: number | null
   history: MemberAttendanceHistoryItem[]
 }
 

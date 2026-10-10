@@ -44,6 +44,7 @@ export const AttendanceReportsView: React.FC = () => {
 
   // State
   const [loading, setLoading] = useState<boolean>(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [registerRows, setRegisterRows] = useState<MonthlyRegisterMemberRow[]>([])
   const [sessions, setSessions] = useState<ActivitySession[]>([])
   const [units, setUnits] = useState<StakeUnit[]>([])
@@ -69,6 +70,7 @@ export const AttendanceReportsView: React.FC = () => {
 
   const loadRegister = async () => {
     setLoading(true)
+    setErrorMsg(null)
     try {
       const data = await fetchMonthlyAttendanceRegister({
         year: selectedYear,
@@ -81,8 +83,9 @@ export const AttendanceReportsView: React.FC = () => {
       setSessions(data.sessions)
       setUnits(data.units)
       setCurrentPage(1)
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load register:', err)
+      setErrorMsg(err.message || 'Unable to compile attendance register from database.')
     } finally {
       setLoading(false)
     }
@@ -98,8 +101,9 @@ export const AttendanceReportsView: React.FC = () => {
     try {
       const p = await fetchMemberAttendanceProfile(memberId)
       if (p) setSelectedProfile(p)
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching member history:', err)
+      alert(`Could not load individual attendance history: ${err.message || 'Database error'}`)
     } finally {
       setLoadingProfile(false)
     }
@@ -132,7 +136,7 @@ export const AttendanceReportsView: React.FC = () => {
 
   const overallPercentage = totalEligibleOpps > 0
     ? Math.round((totalAttendedInstances / totalEligibleOpps) * 1000) / 10
-    : 0
+    : null
 
   const monthNames = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -167,7 +171,7 @@ export const AttendanceReportsView: React.FC = () => {
         'Period': periodLabel,
         'YSA Members': totalMembersIncluded,
         'Activities': sessions.length,
-        'Attendance Rate': `${overallPercentage}%`
+        'Attendance Rate': overallPercentage !== null ? `${overallPercentage}%` : 'N/A'
       },
       headers: ['Full Name', 'Unit', 'Eligible', 'Attended', 'Excused', 'Absent', 'Rate %'],
       rows: filteredRows.map(r => [
@@ -177,9 +181,9 @@ export const AttendanceReportsView: React.FC = () => {
         r.attended_count,
         r.excused_count,
         r.absent_count,
-        `${r.attendance_percentage}%`
+        r.attendance_percentage !== null ? `${r.attendance_percentage}%` : 'N/A'
       ]),
-      summaryFooter: `Total attendance opportunities: ${totalEligibleOpps} • Total check-ins: ${totalAttendedInstances} (${overallPercentage}%)`
+      summaryFooter: `Total eligible finalized opportunities: ${totalEligibleOpps} • Total check-ins: ${totalAttendedInstances} (${overallPercentage !== null ? `${overallPercentage}%` : 'No eligible finalized sessions'})`
     })
   }
 
@@ -229,6 +233,21 @@ export const AttendanceReportsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Error Banner with Retry */}
+      {errorMsg && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-800">
+          <div>
+            <strong className="font-bold">Error loading reporting data:</strong> {errorMsg}
+          </div>
+          <button
+            onClick={loadRegister}
+            className="px-3 py-1.5 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 cursor-pointer"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Aggregate KPI Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
@@ -246,7 +265,7 @@ export const AttendanceReportsView: React.FC = () => {
             <TrendingUp className="w-4 h-4 text-blue-500" />
           </div>
           <div className="text-2xl font-black text-slate-900">{totalEligibleOpps}</div>
-          <div className="text-[11px] text-slate-400 mt-1">{sessions.length} activities scheduled</div>
+          <div className="text-[11px] text-slate-400 mt-1">{sessions.filter(s => s.status === 'closed').length} finalized activities</div>
         </div>
 
         <div className="bg-white p-4 rounded-xl border border-emerald-100 bg-emerald-50/20 shadow-xs">
@@ -272,8 +291,12 @@ export const AttendanceReportsView: React.FC = () => {
             <span className="text-xs font-semibold uppercase tracking-wider">Overall Rate</span>
             <Percent className="w-4 h-4 text-indigo-600" />
           </div>
-          <div className="text-2xl font-black text-indigo-700">{overallPercentage}%</div>
-          <div className="text-[11px] text-indigo-600 mt-1">Aggregate attendance</div>
+          <div className="text-2xl font-black text-indigo-700">
+            {overallPercentage !== null ? `${overallPercentage}%` : 'N/A'}
+          </div>
+          <div className="text-[11px] text-indigo-600 mt-1">
+            {overallPercentage !== null ? 'Aggregate finalized attendance' : 'No eligible activities'}
+          </div>
         </div>
       </div>
 
@@ -381,9 +404,11 @@ export const AttendanceReportsView: React.FC = () => {
 
                   {/* Activity Columns */}
                   {sessions.map(s => (
-                    <th key={s.id} className="py-3.5 px-3 text-center min-w-[110px]" title={s.session_title}>
-                      <div className="truncate max-w-[100px] font-semibold text-slate-900">{s.session_title}</div>
-                      <div className="text-[10px] text-slate-400 font-normal">{s.session_date}</div>
+                    <th key={s.id} className="py-3.5 px-3 text-center min-w-[120px]" title={s.session_title}>
+                      <div className="truncate max-w-[110px] font-semibold text-slate-900">{s.session_title}</div>
+                      <div className="text-[10px] text-slate-400 font-normal">
+                        {s.session_date} {s.status !== 'closed' && <span className="text-amber-600 font-bold">(Provisional)</span>}
+                      </div>
                     </th>
                   ))}
 
@@ -409,15 +434,19 @@ export const AttendanceReportsView: React.FC = () => {
                     <td className="py-3 px-3 text-center font-semibold text-blue-700">{row.excused_count}</td>
                     <td className="py-3 px-3 text-center font-semibold text-rose-700">{row.absent_count}</td>
                     <td className="py-3 px-3 text-center">
-                      <span className={`inline-block px-2 py-0.5 rounded font-black ${
-                        row.attendance_percentage >= 70
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : row.attendance_percentage >= 40
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-rose-100 text-rose-800'
-                      }`}>
-                        {row.attendance_percentage}%
-                      </span>
+                      {row.attendance_percentage !== null ? (
+                        <span className={`inline-block px-2 py-0.5 rounded font-black ${
+                          row.attendance_percentage >= 70
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : row.attendance_percentage >= 40
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}>
+                          {row.attendance_percentage}%
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-semibold">N/A</span>
+                      )}
                     </td>
 
                     {/* Activity Cell Status */}
@@ -438,6 +467,16 @@ export const AttendanceReportsView: React.FC = () => {
                           {st === 'absent' && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-600">
                               Absent
+                            </span>
+                          )}
+                          {st === 'unfinalized_recorded' && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                              Recorded (Prov)
+                            </span>
+                          )}
+                          {st === 'unfinalized_unrecorded' && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-normal text-slate-500 bg-slate-100">
+                              Pending (Prov)
                             </span>
                           )}
                           {st === 'ineligible' && (

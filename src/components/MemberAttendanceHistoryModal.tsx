@@ -61,7 +61,9 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
           </div>
           <div className="bg-white p-3 rounded-xl border border-indigo-200 col-span-2 sm:col-span-1">
             <span className="text-[11px] font-semibold text-indigo-600 uppercase tracking-wider block">Rate</span>
-            <span className="text-xl font-extrabold text-indigo-700">{profile.overall_percentage}%</span>
+            <span className="text-xl font-extrabold text-indigo-700">
+              {profile.overall_percentage !== null ? `${profile.overall_percentage}%` : 'N/A'}
+            </span>
           </div>
         </div>
 
@@ -75,9 +77,11 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
               className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-slate-700 focus:outline-emerald-500"
             >
               <option value="all">All Statuses</option>
-              <option value="present">Present Only</option>
-              <option value="excused">Excused Only</option>
-              <option value="absent">Absent Only</option>
+              <option value="present">Present (Finalized)</option>
+              <option value="excused">Excused (Finalized)</option>
+              <option value="absent">Confirmed Absent</option>
+              <option value="unfinalized_recorded">Provisional Recorded</option>
+              <option value="unfinalized_unrecorded">Provisional Pending</option>
             </select>
           </div>
 
@@ -110,6 +114,9 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
               {filteredHistory.map((item, idx) => {
                 const isPresent = item.attendance_status === 'present'
                 const isExcused = item.attendance_status === 'excused'
+                const isAbsent = item.attendance_status === 'absent'
+                const isProvRecorded = item.attendance_status === 'unfinalized_recorded'
+                const isProvPending = item.attendance_status === 'unfinalized_unrecorded'
 
                 return (
                   <div
@@ -119,6 +126,10 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
                         ? 'bg-emerald-50/40 border-emerald-200'
                         : isExcused
                         ? 'bg-blue-50/40 border-blue-200'
+                        : isProvRecorded
+                        ? 'bg-amber-50/40 border-amber-200'
+                        : isAbsent
+                        ? 'bg-rose-50/30 border-rose-200'
                         : 'bg-slate-50 border-slate-200'
                     }`}
                   >
@@ -160,9 +171,19 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
                           <CheckCircle2 className="w-4 h-4" /> Excused
                         </span>
                       )}
-                      {!isPresent && !isExcused && (
+                      {isAbsent && (
                         <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800">
-                          <XCircle className="w-4 h-4" /> Absent
+                          <XCircle className="w-4 h-4" /> Confirmed Absent
+                        </span>
+                      )}
+                      {isProvRecorded && (
+                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                          <CheckCircle2 className="w-4 h-4" /> Checked In (Pending Finalization)
+                        </span>
+                      )}
+                      {isProvPending && (
+                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600">
+                          Pending Session Closure
                         </span>
                       )}
                     </div>

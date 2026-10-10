@@ -5,29 +5,67 @@ import type {
   StakeAnalyticsSummary, 
   MemberAttendanceProfile, 
   ActivitySession,
-  StakeUnit
+  StakeUnit,
+  ActivityCellAttendanceStatus
 } from '../types/database'
 import { fetchStakeUnits } from './unitService'
-import { fetchMembers, getMockMembers } from './memberService'
-import { fetchSessions, getMockSessions } from './activityService'
+import { fetchMembers } from './memberService'
+import { fetchSessions } from './activityService'
 
 /**
- * Helper to determine member eligibility for a session
+ * Robust helper to verify if a session date falls in target Year & Month
+ * in the official Africa/Lagos (UTC+1) timezone.
  */
-export function isMemberEligibleForSession(member: { id: string; home_unit_id: string }, session: ActivitySession): boolean {
+export function isSessionInLagosPeriod(sessionDateStr: string, year: number, month: number): boolean {
+  if (!sessionDateStr) return false
+  // Format is standard ISO date "YYYY-MM-DD"
+  const parts = sessionDateStr.split('-')
+  if (parts.length >= 2) {
+    const sYear = parseInt(parts[0], 10)
+    const sMonth = parseInt(parts[1], 10)
+    return sYear === year && sMonth === month
+  }
+  // Fallback parsing
+  const d = new Date(sessionDateStr)
+  return d.getFullYear() === year && (d.getMonth() + 1) === month
+}
+
+/**
+ * Authoritative Member Eligibility Evaluator:
+ * - 'all_ysa': if participating_units is empty/null, all YSA eligible; otherwise member's unit must be included.
+ * - 'specific_units': member's unit MUST be included in participating_units.
+ * - 'custom_enrolled': member MUST be present in enrolledMemberIds set for this session.
+ */
+export function isMemberEligibleForSession(
+  member: { id: string; home_unit_id: string },
+  session: ActivitySession,
+  enrolledMemberIdsForSession?: Set<string>
+): boolean {
   if (session.eligibility_rule === 'all_ysa') {
     if (!session.participating_units || session.participating_units.length === 0) return true
     return session.participating_units.includes(member.home_unit_id)
   }
+
   if (session.eligibility_rule === 'specific_units') {
-    return !!session.participating_units && session.participating_units.includes(member.home_unit_id)
+    if (!session.participating_units || session.participating_units.length === 0) return false
+    return session.participating_units.includes(member.home_unit_id)
   }
-  // 'custom_enrolled' is handled via enrolled table or fallback
-  return true
+
+  if (session.eligibility_rule === 'custom_enrolled') {
+    if (!enrolledMemberIdsForSession) return false
+    return enrolledMemberIdsForSession.has(member.id)
+  }
+
+  return false
 }
 
 /**
- * Fetch monthly attendance register for members
+ * Fetch monthly attendance register for members.
+ * Enforces:
+ * 1. Strict database queries (throws on error with message, no silent fallback).
+ * 2. Unfinalized sessions never generate confirmed absences.
+ * 3. Exact custom enrollment check via session_enrolled_members.
+ * 4. Percentage is null when eligible opportunities = 0.
  */
 export async function fetchMonthlyAttendanceRegister(params: {
   year: number
@@ -42,26 +80,14 @@ export async function fetchMonthlyAttendanceRegister(params: {
 }> {
   const { year, month, unitId, activityId, statusFilter = 'closed' } = params
 
-  // 1. Fetch Units
-  const units = await fetchStakeUnits().catch(() => [
-    { id: 'unit-1', unit_name: 'Obantoko 1st Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-2', unit_name: 'Obantoko 2nd Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-3', unit_name: 'Asero Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-4', unit_name: 'Adigbe Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-5', unit_name: 'Alabata Branch', unit_type: 'branch' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-6', unit_name: 'Odeda Branch', unit_type: 'branch' as const, is_active: true, created_at: '', updated_at: '' }
-  ])
+  // 1. Authoritative Units Fetch
+  const units = await fetchStakeUnits()
 
-  // 2. Fetch Sessions in target month
-  const allSessions = await fetchSessions().catch(() => getMockSessions())
+  // 2. Authoritative Sessions Fetch
+  const allSessions = await fetchSessions()
   
   const filteredSessions = allSessions.filter(s => {
-    if (!s.session_date) return false
-    const d = new Date(s.session_date)
-    const matchesYear = d.getFullYear() === year
-    const matchesMonth = d.getMonth() + 1 === month
-    if (!matchesYear || !matchesMonth) return false
-
+    if (!isSessionInLagosPeriod(s.session_date, year, month)) return false
     if (activityId && s.activity_id !== activityId) return false
 
     if (statusFilter === 'closed' && s.status !== 'closed') return false
@@ -70,70 +96,104 @@ export async function fetchMonthlyAttendanceRegister(params: {
     return true
   })
 
-  // 3. Fetch Active Members
-  const members = await fetchMembers(unitId).catch(() => getMockMembers(unitId))
+  // 3. Authoritative Active Members Fetch
+  const members = await fetchMembers(unitId)
 
-  // 4. Fetch Attendance Records for these sessions
-  const sessionIds = filteredSessions.map(s => s.id)
-  let attendanceRecords: { session_id: string; member_id: string; attendance_status?: string }[] = []
+  // 4. Fetch Custom Enrolled records if any sessions use custom_enrolled
+  const customEnrolledSessions = filteredSessions.filter(s => s.eligibility_rule === 'custom_enrolled')
+  const enrolledMap = new Map<string, Set<string>>() // sessionId -> Set of memberIds
 
-  if (sessionIds.length > 0) {
-    try {
-      const { data, error } = await supabase
-        .from('attendance_records')
-        .select('session_id, member_id, attendance_status')
-        .in('session_id', sessionIds)
+  if (customEnrolledSessions.length > 0) {
+    const customSessionIds = customEnrolledSessions.map(s => s.id)
+    const { data: enrolledData, error: enrolledErr } = await supabase
+      .from('session_enrolled_members')
+      .select('session_id, member_id')
+      .in('session_id', customSessionIds)
 
-      if (!error && data) {
-        attendanceRecords = data
+    if (enrolledErr) {
+      throw new Error(`Failed to verify session enrollment: ${enrolledErr.message}`)
+    }
+
+    if (enrolledData) {
+      for (const item of enrolledData) {
+        if (!enrolledMap.has(item.session_id)) {
+          enrolledMap.set(item.session_id, new Set())
+        }
+        enrolledMap.get(item.session_id)!.add(item.member_id)
       }
-    } catch {
-      // Mock fallback if offline
-      attendanceRecords = []
     }
   }
 
-  // Quick lookup map: "sessionId:memberId" -> status
+  // 5. Fetch Attendance Records for these sessions
+  const sessionIds = filteredSessions.map(s => s.id)
   const attMap = new Map<string, 'present' | 'excused'>()
-  for (const rec of attendanceRecords) {
-    attMap.set(`${rec.session_id}:${rec.member_id}`, (rec.attendance_status as 'present' | 'excused') || 'present')
+
+  if (sessionIds.length > 0) {
+    const { data: attendanceData, error: attErr } = await supabase
+      .from('attendance_records')
+      .select('session_id, member_id, attendance_status')
+      .in('session_id', sessionIds)
+
+    if (attErr) {
+      throw new Error(`Database error fetching attendance records: ${attErr.message}`)
+    }
+
+    if (attendanceData) {
+      for (const rec of attendanceData) {
+        attMap.set(`${rec.session_id}:${rec.member_id}`, (rec.attendance_status as 'present' | 'excused') || 'present')
+      }
+    }
   }
 
-  // 5. Aggregate Member Rows
+  // 6. Aggregate Member Rows
   const rows: MonthlyRegisterMemberRow[] = members.map(m => {
     const memberUnit = units.find(u => u.id === m.home_unit_id)
     const unitName = memberUnit?.unit_name || m.stake_unit?.unit_name || 'Obantoko Unit'
     const unitType = memberUnit?.unit_type || m.stake_unit?.unit_type || 'ward'
 
-    let eligibleCount = 0
+    let eligibleFinalizedCount = 0
     let attendedCount = 0
     let excusedCount = 0
-    const activityStatuses: Record<string, 'present' | 'excused' | 'absent' | 'ineligible'> = {}
+    let confirmedAbsenceCount = 0
+    const activityStatuses: Record<string, ActivityCellAttendanceStatus> = {}
 
     for (const sess of filteredSessions) {
-      const isEligible = isMemberEligibleForSession(m, sess)
+      const isEligible = isMemberEligibleForSession(m, sess, enrolledMap.get(sess.id))
       if (!isEligible) {
         activityStatuses[sess.id] = 'ineligible'
         continue
       }
 
-      eligibleCount++
+      const isFinalized = sess.status === 'closed'
       const recordStatus = attMap.get(`${sess.id}:${m.id}`)
-      if (recordStatus === 'present') {
-        attendedCount++
-        activityStatuses[sess.id] = 'present'
-      } else if (recordStatus === 'excused') {
-        excusedCount++
-        activityStatuses[sess.id] = 'excused'
+
+      if (isFinalized) {
+        eligibleFinalizedCount++
+        if (recordStatus === 'present') {
+          attendedCount++
+          activityStatuses[sess.id] = 'present'
+        } else if (recordStatus === 'excused') {
+          excusedCount++
+          activityStatuses[sess.id] = 'excused'
+        } else {
+          confirmedAbsenceCount++
+          activityStatuses[sess.id] = 'absent'
+        }
       } else {
-        activityStatuses[sess.id] = 'absent'
+        // Unfinalized session: Provisional status, never confirmed absence!
+        if (recordStatus === 'present' || recordStatus === 'excused') {
+          activityStatuses[sess.id] = 'unfinalized_recorded'
+        } else {
+          activityStatuses[sess.id] = 'unfinalized_unrecorded'
+        }
       }
     }
 
-    const absentCount = Math.max(0, eligibleCount - (attendedCount + excusedCount))
-    const attendancePercentage = eligibleCount > 0 
-      ? Math.round((attendedCount / eligibleCount) * 1000) / 10 
-      : 0
+    // Attendance percentage strictly calculated on finalized eligible sessions:
+    // attended / eligible finalized * 100
+    const attendancePercentage = eligibleFinalizedCount > 0 
+      ? Math.round((attendedCount / eligibleFinalizedCount) * 1000) / 10 
+      : null
 
     return {
       member_id: m.id,
@@ -142,10 +202,10 @@ export async function fetchMonthlyAttendanceRegister(params: {
       home_unit_id: m.home_unit_id,
       unit_name: unitName,
       unit_type: unitType,
-      eligible_sessions_count: eligibleCount,
+      eligible_sessions_count: eligibleFinalizedCount,
       attended_count: attendedCount,
       excused_count: excusedCount,
-      absent_count: absentCount,
+      absent_count: confirmedAbsenceCount,
       attendance_percentage: attendancePercentage,
       activity_statuses: activityStatuses
     }
@@ -159,7 +219,7 @@ export async function fetchMonthlyAttendanceRegister(params: {
 }
 
 /**
- * Fetch detailed Unit Monthly Report with previous-month comparison
+ * Fetch detailed Unit Monthly Report with accurate opportunity-based calculations.
  */
 export async function fetchUnitMonthlyReport(
   unitId: string,
@@ -177,12 +237,17 @@ export async function fetchUnitMonthlyReport(
   const prevMonth = month === 1 ? 12 : month - 1
   const prevYear = month === 1 ? year - 1 : year
 
-  const prevRegister = await fetchMonthlyAttendanceRegister({
-    year: prevYear,
-    month: prevMonth,
-    unitId,
-    statusFilter: 'closed'
-  }).catch(() => null)
+  let prevRegister = null
+  try {
+    prevRegister = await fetchMonthlyAttendanceRegister({
+      year: prevYear,
+      month: prevMonth,
+      unitId,
+      statusFilter: 'closed'
+    })
+  } catch (err) {
+    console.warn('Previous month register query notice:', err)
+  }
 
   const unit = currentRegister.units.find(u => u.id === unitId)
   const unitName = unit?.unit_name || 'Ward/Branch'
@@ -194,35 +259,44 @@ export async function fetchUnitMonthlyReport(
   let totalAttended = 0
   let totalExcused = 0
   let totalAbsences = 0
+  let totalEligibleOpportunitiesSum = 0
 
   for (const row of currentRegister.rows) {
     totalAttended += row.attended_count
     totalExcused += row.excused_count
     totalAbsences += row.absent_count
+    totalEligibleOpportunitiesSum += row.eligible_sessions_count
   }
 
-  const totalOpportunities = totalRegistered * totalEligibleSessions
-  const overallPercentage = totalOpportunities > 0
-    ? Math.round((totalAttended / totalOpportunities) * 1000) / 10
-    : 0
+  // Overall attendance percentage: total attended / sum of actual eligible finalized opportunities
+  const overallPercentage = totalEligibleOpportunitiesSum > 0
+    ? Math.round((totalAttended / totalEligibleOpportunitiesSum) * 1000) / 10
+    : null
 
   let prevPercentage: number | null = null
   let percentageChange: number | null = null
 
-  if (prevRegister && prevRegister.sessions.length > 0 && prevRegister.rows.length > 0) {
+  if (prevRegister && prevRegister.rows.length > 0) {
     let pAttended = 0
-    for (const r of prevRegister.rows) pAttended += r.attended_count
-    const pOpp = prevRegister.rows.length * prevRegister.sessions.length
-    prevPercentage = pOpp > 0 ? Math.round((pAttended / pOpp) * 1000) / 10 : 0
-    percentageChange = Math.round((overallPercentage - prevPercentage) * 10) / 10
+    let pOppSum = 0
+    for (const r of prevRegister.rows) {
+      pAttended += r.attended_count
+      pOppSum += r.eligible_sessions_count
+    }
+    if (pOppSum > 0) {
+      prevPercentage = Math.round((pAttended / pOppSum) * 1000) / 10
+      if (overallPercentage !== null) {
+        percentageChange = Math.round((overallPercentage - prevPercentage) * 10) / 10
+      }
+    }
   }
 
-  // Members with zero attendance
+  // Members with zero attendance among those who had eligible finalized sessions
   const zeroAttendanceMembers = currentRegister.rows
     .filter(r => r.attended_count === 0 && r.eligible_sessions_count > 0)
     .map(r => ({ id: r.member_id, full_name: r.full_name }))
 
-  // Activities with low participation (< 50%)
+  // Activities with low participation (< 50% of actually eligible members)
   const lowParticipationActivities: { session_id: string; title: string; session_date: string; attendance_count: number; percentage: number }[] = []
   
   for (const sess of currentRegister.sessions) {
@@ -235,7 +309,7 @@ export async function fetchUnitMonthlyReport(
       }
     }
     const pct = sessElig > 0 ? Math.round((sessAtt / sessElig) * 1000) / 10 : 0
-    if (pct < 50) {
+    if (sessElig > 0 && pct < 50) {
       lowParticipationActivities.push({
         session_id: sess.id,
         title: sess.session_title,
@@ -265,20 +339,14 @@ export async function fetchUnitMonthlyReport(
 }
 
 /**
- * Fetch Stake-Wide Analytics Summary for Presidency & Admins
+ * Fetch Stake-Wide Analytics Summary for Presidency & Admins.
+ * Uses exact sum of eligible opportunities.
  */
 export async function fetchStakeAnalytics(
   year: number,
   month: number
 ): Promise<StakeAnalyticsSummary> {
-  const units = await fetchStakeUnits().catch(() => [
-    { id: 'unit-1', unit_name: 'Obantoko 1st Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-2', unit_name: 'Obantoko 2nd Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-3', unit_name: 'Asero Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-4', unit_name: 'Adigbe Ward', unit_type: 'ward' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-5', unit_name: 'Alabata Branch', unit_type: 'branch' as const, is_active: true, created_at: '', updated_at: '' },
-    { id: 'unit-6', unit_name: 'Odeda Branch', unit_type: 'branch' as const, is_active: true, created_at: '', updated_at: '' }
-  ])
+  const units = await fetchStakeUnits()
 
   const register = await fetchMonthlyAttendanceRegister({
     year,
@@ -292,40 +360,55 @@ export async function fetchStakeAnalytics(
   // Previous month comparison
   const prevMonth = month === 1 ? 12 : month - 1
   const prevYear = month === 1 ? year - 1 : year
-  const prevRegister = await fetchMonthlyAttendanceRegister({
-    year: prevYear,
-    month: prevMonth,
-    statusFilter: 'closed'
-  }).catch(() => null)
+  let prevRegister = null
+  try {
+    prevRegister = await fetchMonthlyAttendanceRegister({
+      year: prevYear,
+      month: prevMonth,
+      statusFilter: 'closed'
+    })
+  } catch (err) {
+    console.warn('Previous month stake query notice:', err)
+  }
 
   let totalAttended = 0
   let totalExcused = 0
+  let totalEligibleOpportunitiesSum = 0
+
   for (const r of register.rows) {
     totalAttended += r.attended_count
     totalExcused += r.excused_count
+    totalEligibleOpportunitiesSum += r.eligible_sessions_count
   }
 
-  const totalOpps = register.rows.length * finalizedSessions.length
-  const overallPercentage = totalOpps > 0 
-    ? Math.round((totalAttended / totalOpps) * 1000) / 10 
-    : 0
+  const overallPercentage = totalEligibleOpportunitiesSum > 0 
+    ? Math.round((totalAttended / totalEligibleOpportunitiesSum) * 1000) / 10 
+    : null
 
   let prevOverallPercentage: number | null = null
-  if (prevRegister && prevRegister.sessions.length > 0 && prevRegister.rows.length > 0) {
+  if (prevRegister && prevRegister.rows.length > 0) {
     let pAtt = 0
-    for (const r of prevRegister.rows) pAtt += r.attended_count
-    const pOpp = prevRegister.rows.length * prevRegister.sessions.length
-    prevOverallPercentage = pOpp > 0 ? Math.round((pAtt / pOpp) * 1000) / 10 : 0
+    let pOpp = 0
+    for (const r of prevRegister.rows) {
+      pAtt += r.attended_count
+      pOpp += r.eligible_sessions_count
+    }
+    if (pOpp > 0) {
+      prevOverallPercentage = Math.round((pAtt / pOpp) * 1000) / 10
+    }
   }
 
-  // Unit breakdown
+  // Unit breakdown with actual eligible opportunities sum per unit
   const unitBreakdown = units.map(u => {
     const unitMembers = register.rows.filter(r => r.home_unit_id === u.id)
     let uAtt = 0
-    for (const m of unitMembers) uAtt += m.attended_count
-    const uOpp = unitMembers.length * finalizedSessions.length
-    const uPct = uOpp > 0 ? Math.round((uAtt / uOpp) * 1000) / 10 : 0
-    const zeroCount = unitMembers.filter(m => m.attended_count === 0 && finalizedSessions.length > 0).length
+    let uEligibleOpportunities = 0
+    for (const m of unitMembers) {
+      uAtt += m.attended_count
+      uEligibleOpportunities += m.eligible_sessions_count
+    }
+    const uPct = uEligibleOpportunities > 0 ? Math.round((uAtt / uEligibleOpportunities) * 1000) / 10 : null
+    const zeroCount = unitMembers.filter(m => m.attended_count === 0 && m.eligible_sessions_count > 0).length
 
     return {
       unit_id: u.id,
@@ -357,7 +440,6 @@ export async function fetchStakeAnalytics(
     attendance_count: val.attended
   }))
 
-  // Monthly trends (Last 4 months rolling)
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   const monthlyTrends = [
     {
@@ -384,8 +466,8 @@ export async function fetchStakeAnalytics(
       .from('attendance_corrections')
       .select('*', { count: 'exact', head: true })
     correctionsCount = cCount || 0
-  } catch {
-    // fallback
+  } catch (err) {
+    console.warn('Audit count fetch notice:', err)
   }
 
   return {
@@ -408,52 +490,78 @@ export async function fetchStakeAnalytics(
 }
 
 /**
- * Fetch Individual Member Attendance Profile & Chronological History
+ * Fetch Individual Member Attendance Profile & Chronological History.
  */
 export async function fetchMemberAttendanceProfile(memberId: string): Promise<MemberAttendanceProfile | null> {
-  const members = await fetchMembers().catch(() => getMockMembers())
+  const members = await fetchMembers()
   const member = members.find(m => m.id === memberId)
   if (!member) return null
 
-  const units = await fetchStakeUnits().catch(() => [])
-  const sessions = await fetchSessions().catch(() => getMockSessions())
+  const units = await fetchStakeUnits()
+  const sessions = await fetchSessions()
+
+  // Fetch custom enrollments for this member if needed
+  const { data: enrollmentData } = await supabase
+    .from('session_enrolled_members')
+    .select('session_id')
+    .eq('member_id', memberId)
+  
+  const memberEnrolledSessionIds = new Set((enrollmentData || []).map(e => e.session_id))
 
   // Get attendance records for this member
-  let records: { session_id: string; recorded_unit_id: string; check_in_time: string; attendance_status?: string }[] = []
-  try {
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .select('session_id, recorded_unit_id, check_in_time, attendance_status')
-      .eq('member_id', memberId)
+  const { data: records, error: recErr } = await supabase
+    .from('attendance_records')
+    .select('session_id, recorded_unit_id, check_in_time, attendance_status')
+    .eq('member_id', memberId)
 
-    if (!error && data) records = data
-  } catch {
-    records = []
+  if (recErr) {
+    throw new Error(`Database error fetching member attendance: ${recErr.message}`)
   }
 
-  const recMap = new Map(records.map(r => [r.session_id, r]))
+  const recMap = new Map((records || []).map(r => [r.session_id, r]))
 
-  let totalEligible = 0
+  let totalEligibleFinalized = 0
   let totalAttended = 0
   let totalExcused = 0
+  let totalConfirmedAbsent = 0
 
   const history = sessions
-    .filter(s => isMemberEligibleForSession(member, s))
+    .filter(s => {
+      const enrolledSet = memberEnrolledSessionIds.has(s.id) ? new Set([memberId]) : new Set<string>()
+      return isMemberEligibleForSession(member, s, enrolledSet)
+    })
     .map(s => {
-      totalEligible++
       const rec = recMap.get(s.id)
-      let attStatus: 'present' | 'excused' | 'absent' = 'absent'
+      const isFinalized = s.status === 'closed'
+      let attStatus: 'present' | 'excused' | 'absent' | 'unfinalized_recorded' | 'unfinalized_unrecorded' = 'unfinalized_unrecorded'
+
       let recUnitName = member.stake_unit?.unit_name || 'Home Unit'
       let recUnitType = member.stake_unit?.unit_type || 'ward'
 
-      if (rec) {
-        if (rec.attendance_status === 'excused') {
-          attStatus = 'excused'
-          totalExcused++
+      if (isFinalized) {
+        totalEligibleFinalized++
+        if (rec) {
+          if (rec.attendance_status === 'excused') {
+            attStatus = 'excused'
+            totalExcused++
+          } else {
+            attStatus = 'present'
+            totalAttended++
+          }
         } else {
-          attStatus = 'present'
-          totalAttended++
+          attStatus = 'absent'
+          totalConfirmedAbsent++
         }
+      } else {
+        // Provisional session: not a finalized opportunity
+        if (rec) {
+          attStatus = 'unfinalized_recorded'
+        } else {
+          attStatus = 'unfinalized_unrecorded'
+        }
+      }
+
+      if (rec) {
         const recUnit = units.find(u => u.id === rec.recorded_unit_id)
         if (recUnit) {
           recUnitName = recUnit.unit_name
@@ -475,17 +583,16 @@ export async function fetchMemberAttendanceProfile(memberId: string): Promise<Me
     })
     .sort((a, b) => new Date(b.session_date).getTime() - new Date(a.session_date).getTime())
 
-  const totalAbsent = Math.max(0, totalEligible - (totalAttended + totalExcused))
-  const overallPercentage = totalEligible > 0
-    ? Math.round((totalAttended / totalEligible) * 1000) / 10
-    : 0
+  const overallPercentage = totalEligibleFinalized > 0
+    ? Math.round((totalAttended / totalEligibleFinalized) * 1000) / 10
+    : null
 
   return {
     member,
-    total_eligible_sessions: totalEligible,
+    total_eligible_sessions: totalEligibleFinalized,
     total_attended: totalAttended,
     total_excused: totalExcused,
-    total_absent: totalAbsent,
+    total_absent: totalConfirmedAbsent,
     overall_percentage: overallPercentage,
     history
   }

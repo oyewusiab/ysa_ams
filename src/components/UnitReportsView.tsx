@@ -27,8 +27,10 @@ export const UnitReportsView: React.FC = () => {
   const [units, setUnits] = useState<StakeUnit[]>([])
 
   // State
+  // State
   const [report, setReport] = useState<UnitMonthlyReport | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState<string>('')
 
   // Member history drill-down modal
@@ -49,8 +51,9 @@ export const UnitReportsView: React.FC = () => {
         } else if (uList.length > 0 && !selectedUnitId) {
           setSelectedUnitId(uList[0].id)
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error fetching units:', err)
+        setErrorMsg(err.message || 'Failed to load stake units.')
       }
     }
     loadUnits()
@@ -61,11 +64,13 @@ export const UnitReportsView: React.FC = () => {
 
     async function loadReport() {
       setLoading(true)
+      setErrorMsg(null)
       try {
         const data = await fetchUnitMonthlyReport(selectedUnitId, selectedYear, selectedMonth)
         setReport(data)
-      } catch (err) {
+      } catch (err: any) {
         console.error('Error fetching unit report:', err)
+        setErrorMsg(err.message || 'Database error generating unit monthly report.')
       } finally {
         setLoading(false)
       }
@@ -78,8 +83,9 @@ export const UnitReportsView: React.FC = () => {
     try {
       const p = await fetchMemberAttendanceProfile(memberId)
       if (p) setSelectedProfile(p)
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching member profile:', err)
+      alert(`Could not load member profile: ${err.message || 'Database error'}`)
     }
   }
 
@@ -103,7 +109,7 @@ export const UnitReportsView: React.FC = () => {
         'Unit': `${report.unit_name} (${report.unit_type.toUpperCase()})`,
         'Period': periodLabel,
         'Registered YSA': report.registered_ysa_count,
-        'Attendance Rate': `${report.overall_attendance_percentage}%`
+        'Attendance Rate': report.overall_attendance_percentage !== null ? `${report.overall_attendance_percentage}%` : 'N/A'
       },
       headers: ['Member Name', 'Eligible Activities', 'Attended', 'Excused', 'Absent', 'Rate %'],
       rows: report.member_rows.map(r => [
@@ -112,7 +118,7 @@ export const UnitReportsView: React.FC = () => {
         r.attended_count,
         r.excused_count,
         r.absent_count,
-        `${r.attendance_percentage}%`
+        r.attendance_percentage !== null ? `${r.attendance_percentage}%` : 'N/A'
       ]),
       summaryFooter: `Attended: ${report.total_attendance_instances} • Absences: ${report.total_absences} • Excused: ${report.total_excused} • Prev Month: ${report.previous_month_percentage !== null ? `${report.previous_month_percentage}%` : 'N/A'}`
     })
@@ -157,6 +163,30 @@ export const UnitReportsView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Error banner with retry */}
+      {errorMsg && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center justify-between text-xs text-rose-800">
+          <div>
+            <strong className="font-bold">Error loading unit report:</strong> {errorMsg}
+          </div>
+          <button
+            onClick={() => {
+              if (selectedUnitId) {
+                setLoading(true)
+                setErrorMsg(null)
+                fetchUnitMonthlyReport(selectedUnitId, selectedYear, selectedMonth)
+                  .then(setReport)
+                  .catch(err => setErrorMsg(err.message))
+                  .finally(() => setLoading(false))
+              }
+            }}
+            className="px-3 py-1.5 bg-rose-600 text-white font-bold rounded-lg hover:bg-rose-700 cursor-pointer"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Selector Controls */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -229,9 +259,11 @@ export const UnitReportsView: React.FC = () => {
 
             <div className="bg-white p-4 rounded-xl border border-emerald-100 bg-emerald-50/20 shadow-xs">
               <span className="text-xs font-semibold text-emerald-700 uppercase tracking-wider block">Overall Rate</span>
-              <div className="text-2xl font-black text-emerald-700 mt-1">{report.overall_attendance_percentage}%</div>
+              <div className="text-2xl font-black text-emerald-700 mt-1">
+                {report.overall_attendance_percentage !== null ? `${report.overall_attendance_percentage}%` : 'N/A'}
+              </div>
               <div className="text-[11px] text-emerald-600 mt-1">
-                {report.total_attendance_instances} check-ins
+                {report.overall_attendance_percentage !== null ? `${report.total_attendance_instances} check-ins` : 'No eligible activities'}
               </div>
             </div>
 
@@ -380,13 +412,15 @@ export const UnitReportsView: React.FC = () => {
                       <td className="py-3 px-3 text-center font-semibold text-rose-700">{m.absent_count}</td>
                       <td className="py-3 px-3 text-center">
                         <span className={`inline-block px-2 py-0.5 rounded font-black ${
-                          m.attendance_percentage >= 70
+                          m.attendance_percentage === null
+                            ? 'bg-slate-100 text-slate-500'
+                            : m.attendance_percentage >= 70
                             ? 'bg-emerald-100 text-emerald-800'
                             : m.attendance_percentage >= 40
                             ? 'bg-amber-100 text-amber-800'
                             : 'bg-rose-100 text-rose-800'
                         }`}>
-                          {m.attendance_percentage}%
+                          {m.attendance_percentage !== null ? `${m.attendance_percentage}%` : 'N/A'}
                         </span>
                       </td>
                       <td className="py-3 px-4 text-right">
