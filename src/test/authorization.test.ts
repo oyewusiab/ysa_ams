@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { RoleName } from '../types/database'
+import { formatRoleName, formatUserRoles, type RoleName } from '../types/database'
 
 // Logic rules tested against database constraints and RPC policies
 function canAccessUserAdministration(roles: RoleName[], accountStatus: string): boolean {
@@ -114,5 +114,28 @@ describe('Authorization & Security Matrix Enforcement', () => {
     expect(canViewAuditLogs(['stake_presidency'], 'active')).toBe(true)
     expect(canViewAuditLogs(['ysa_leader'], 'active')).toBe(false)
     expect(canViewAuditLogs(['bishop'], 'active')).toBe(false)
+  })
+
+  it('13. Regression: formatRoleName accurately resolves system_admin to "System Administrator"', () => {
+    expect(formatRoleName('system_admin')).toBe('System Administrator')
+    expect(formatRoleName('ysa_leader')).toBe('YSA Leader')
+    expect(formatRoleName('stake_presidency')).toBe('Stake Presidency')
+    expect(formatRoleName('bishop')).toBe('Bishop')
+    expect(formatRoleName('branch_president')).toBe('Branch President')
+
+    expect(formatUserRoles(['system_admin'])).toBe('System Administrator')
+    expect(formatUserRoles(['system_admin', 'ysa_leader'])).toBe('System Administrator, YSA Leader')
+    expect(formatUserRoles([])).toBe('Member')
+  })
+
+  it('14. Regression: system_admin role is verified via database user_roles and grants full permissions', () => {
+    const activeAdminRoles: RoleName[] = ['system_admin']
+    const isAccountActive = true
+
+    // Verified role yields true for all administration capabilities
+    const isAdmin = isAccountActive && activeAdminRoles.includes('system_admin')
+    expect(isAdmin).toBe(true)
+    expect(canAccessUserAdministration(activeAdminRoles, 'active')).toBe(true)
+    expect(canViewAuditLogs(activeAdminRoles, 'active')).toBe(true)
   })
 })

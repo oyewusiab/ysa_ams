@@ -344,7 +344,7 @@ export const PublicAttendanceFormView: React.FC = () => {
             href="/la"
             className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold underline decoration-emerald-500/50"
           >
-            Leadership & Admin Portal (/la) →
+            Leadership & Admin Portal →
           </a>
         </div>
       </footer>

@@ -23,6 +23,7 @@ import {
   UserCheck,
   RotateCcw
 } from 'lucide-react'
+import { formatUserRoles } from '../types/database'
 
 type NavigationTab = 
   | 'dashboard' 
@@ -205,7 +206,7 @@ export const AuthenticatedShell: React.FC = () => {
                   {profile?.full_name || 'Authorized Member'}
                 </div>
                 <div className="text-xs text-emerald-700 capitalize font-medium">
-                  {roles.length > 0 ? roles.join(', ').replace(/_/g, ' ') : 'Member'}
+                  {formatUserRoles(roles)}
                 </div>
               </div>
               <button
@@ -303,7 +304,7 @@ export const AuthenticatedShell: React.FC = () => {
             <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
               <div>
                 <div className="text-sm font-bold text-slate-800">{profile?.full_name}</div>
-                <div className="text-xs text-emerald-700">{roles.join(', ')}</div>
+                <div className="text-xs text-emerald-700">{formatUserRoles(roles)}</div>
               </div>
               <button
                 onClick={signOut}

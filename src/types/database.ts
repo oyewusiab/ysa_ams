@@ -9,6 +9,26 @@ export type RoleName =
   | 'bishop'
   | 'branch_president'
 
+export const ROLE_LABELS: Record<RoleName, string> = {
+  system_admin: 'System Administrator',
+  ysa_leader: 'YSA Leader',
+  stake_presidency: 'Stake Presidency',
+  bishop: 'Bishop',
+  branch_president: 'Branch President',
+}
+
+export function formatRoleName(role: RoleName | string): string {
+  if (role in ROLE_LABELS) {
+    return ROLE_LABELS[role as RoleName]
+  }
+  return role.replace(/_/g, ' ')
+}
+
+export function formatUserRoles(roles: (RoleName | string)[]): string {
+  if (!roles || roles.length === 0) return 'Member'
+  return roles.map(r => formatRoleName(r)).join(', ')
+}
+
 export interface StakeUnit {
   id: string
   unit_name: string

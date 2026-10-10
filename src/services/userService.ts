@@ -16,16 +16,26 @@ export async function fetchUserProfileWithRoles(userId: string): Promise<UserWit
     .eq('id', userId)
     .single()
 
-  if (profileErr || !profile) {
+  if (profileErr) {
+    console.error(`fetchUserProfileWithRoles: profile lookup failed for user ${userId}:`, profileErr)
     return null
   }
 
-  const { data: roles } = await supabase
+  if (!profile) {
+    console.warn(`fetchUserProfileWithRoles: no profile found for user ${userId}`)
+    return null
+  }
+
+  const { data: roles, error: rolesErr } = await supabase
     .from('user_roles')
     .select('*')
     .eq('user_id', userId)
 
-  const { data: assignments } = await supabase
+  if (rolesErr) {
+    console.error(`fetchUserProfileWithRoles: roles query error for user ${userId}:`, rolesErr)
+  }
+
+  const { data: assignments, error: assignmentsErr } = await supabase
     .from('user_unit_assignments')
     .select(`
       *,
@@ -35,6 +45,10 @@ export async function fetchUserProfileWithRoles(userId: string): Promise<UserWit
       )
     `)
     .eq('user_id', userId)
+
+  if (assignmentsErr) {
+    console.error(`fetchUserProfileWithRoles: unit assignments query error for user ${userId}:`, assignmentsErr)
+  }
 
   return {
     ...profile,
