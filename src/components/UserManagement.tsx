@@ -1,9 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { manageUserRoleRPC, updateUserAccountStatusRPC, adminProvisionUserRPC, type UserWithDetails } from '../services/userService'
+import {
+  manageUserRoleRPC,
+  updateUserAccountStatusRPC,
+  adminProvisionUserRPC,
+  provisionLeaderEdgeFunction,
+  type UserWithDetails,
+} from '../services/userService'
 import { fetchStakeUnits, assignUserToUnit, revokeUserUnitAssignment } from '../services/unitService'
 import type { StakeUnit, RoleName } from '../types/database'
-import { Users, Building2, CheckCircle2, AlertCircle, RefreshCw, X, UserPlus } from 'lucide-react'
+import { Users, Building2, CheckCircle2, AlertCircle, RefreshCw, X, UserPlus, Eye, EyeOff, Key } from 'lucide-react'
 
 export const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<UserWithDetails[]>([])
@@ -21,6 +27,8 @@ export const UserManagement: React.FC = () => {
   const [provRole, setProvRole] = useState<RoleName>('ysa_leader')
   const [provUnitId, setProvUnitId] = useState('')
   const [provMustChangePassword, setProvMustChangePassword] = useState(true)
+  const [provTempPassword, setProvTempPassword] = useState('ObantokoYSA2026!')
+  const [showTempPassword, setShowTempPassword] = useState(false)
 
   // Unit assignment modal state
   const [assignmentModalUser, setAssignmentModalUser] = useState<UserWithDetails | null>(null)
@@ -182,28 +190,59 @@ export const UserManagement: React.FC = () => {
     setActionLoading('provision')
 
     try {
-      const res = await adminProvisionUserRPC({
-        fullName: provFullName.trim(),
-        email: provEmail.trim().toLowerCase(),
-        username: provUsername.trim() || undefined,
-        roleName: provRole,
-        assignedUnitId: provUnitId || undefined,
-        mustChangePassword: provMustChangePassword
-      })
+      const trimmedEmail = provEmail.trim().toLowerCase()
+      const trimmedFullName = provFullName.trim()
+      const trimmedUsername = provUsername.trim() || undefined
+      const tempPass = provTempPassword.trim()
 
-      if (!res.success) {
-        throw new Error(res.error || 'Failed to provision user')
+      if (!tempPass || tempPass.length < 8) {
+        throw new Error('Temporary password must be at least 8 characters.')
       }
 
-      setActionMessage({
-        text: `Specification registered for ${provFullName} (${provRole}). Next: create their authentication login in Supabase Auth Console with their temporary password.`,
-        type: 'success'
+      // 1. Try invoking the secure provision-leader Edge Function
+      const edgeRes = await provisionLeaderEdgeFunction({
+        fullName: trimmedFullName,
+        email: trimmedEmail,
+        username: trimmedUsername,
+        roleName: provRole,
+        assignedUnitId: provUnitId || undefined,
+        temporaryPassword: tempPass,
       })
+
+      if (edgeRes.success) {
+        const identifier = edgeRes.loginIdentifier || trimmedUsername || trimmedEmail
+        setActionMessage({
+          text: `Account for ${trimmedFullName} successfully provisioned and ready for login! User can log in immediately at /la using identifier "${identifier}".`,
+          type: 'success',
+        })
+      } else {
+        // If Edge function fails due to network/deployment, fall back to registering specification via RPC
+        console.warn('Edge Function returned error, trying fallback to RPC specification:', edgeRes.error)
+        const rpcRes = await adminProvisionUserRPC({
+          fullName: trimmedFullName,
+          email: trimmedEmail,
+          username: trimmedUsername,
+          roleName: provRole,
+          assignedUnitId: provUnitId || undefined,
+          mustChangePassword: provMustChangePassword,
+        })
+
+        if (!rpcRes.success) {
+          throw new Error(edgeRes.error || rpcRes.error || 'Failed to provision leader account')
+        }
+
+        setActionMessage({
+          text: `Specification registered for ${trimmedFullName} (${provRole}). Note: ${edgeRes.error || 'Edge function provision completed fallback'}.`,
+          type: 'success',
+        })
+      }
+
       setShowProvisionModal(false)
       setProvFullName('')
       setProvEmail('')
       setProvUsername('')
       setProvUnitId('')
+      setProvTempPassword('ObantokoYSA2026!')
       await loadData()
     } catch (err: any) {
       setActionMessage({ text: err.message || 'Provisioning failed', type: 'error' })
@@ -497,7 +536,7 @@ export const UserManagement: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-500 mb-4">
-              Creates a controlled account specification. Public registration for leaders is disallowed.
+              Securely provisions an authentication account, roles, and unit assignments entirely from this portal. No public registration is permitted.
             </p>
 
             <form onSubmit={handleProvisionUser} className="space-y-4">
@@ -580,6 +619,36 @@ export const UserManagement: React.FC = () => {
                 </div>
               </div>
 
+              {/* Temporary Password Field */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1">
+                    <Key className="w-3.5 h-3.5 text-emerald-700" />
+                    Initial Temporary Password *
+                  </span>
+                  <span className="text-[11px] text-slate-400 lowercase font-normal">(min 8 characters)</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type={showTempPassword ? 'text' : 'password'}
+                    required
+                    minLength={8}
+                    value={provTempPassword}
+                    onChange={(e) => setProvTempPassword(e.target.value)}
+                    className="w-full px-3 py-2 pr-10 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                    placeholder="Enter secure temporary password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowTempPassword(!showTempPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    tabIndex={-1}
+                  >
+                    {showTempPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
               <div className="flex items-center gap-2 pt-1">
                 <input
                   type="checkbox"
@@ -604,9 +673,19 @@ export const UserManagement: React.FC = () => {
                 <button
                   type="submit"
                   disabled={actionLoading === 'provision'}
-                  className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-bold hover:bg-emerald-800 disabled:opacity-50 cursor-pointer shadow-xs"
+                  className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-bold hover:bg-emerald-800 disabled:opacity-50 cursor-pointer shadow-xs flex items-center gap-2"
                 >
-                  {actionLoading === 'provision' ? 'Provisioning...' : 'Register Provisioning'}
+                  {actionLoading === 'provision' ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      Provisioning...
+                    </>
+                  ) : (
+                    <>
+                      <UserPlus className="w-4 h-4" />
+                      Complete Provisioning
+                    </>
+                  )}
                 </button>
               </div>
             </form>

@@ -164,3 +164,63 @@ export async function completeFirstLoginPasswordChangeRPC(): Promise<{ success: 
   }
   return { success: true, ...data }
 }
+
+/**
+ * Phase 2.2: Complete Frontend Leader Provisioning via Supabase Edge Function
+ * Invokes the secure 'provision-leader' Edge Function which uses Auth Admin API.
+ * Caller JWT is verified server-side; service-role key is never exposed to the client.
+ */
+export async function provisionLeaderEdgeFunction(params: {
+  fullName: string
+  email: string
+  username?: string
+  roleName: RoleName
+  assignedUnitId?: string
+  temporaryPassword?: string
+}): Promise<{
+  success: boolean
+  message?: string
+  userId?: string
+  email?: string
+  username?: string
+  loginIdentifier?: string
+  error?: string
+}> {
+  try {
+    const { data, error } = await supabase.functions.invoke('provision-leader', {
+      body: {
+        fullName: params.fullName,
+        email: params.email,
+        username: params.username || undefined,
+        roleName: params.roleName,
+        assignedUnitId: params.assignedUnitId || undefined,
+        temporaryPassword: params.temporaryPassword || undefined,
+      },
+    })
+
+    if (error) {
+      console.warn('Edge function invoke error, inspecting response or falling back:', error)
+      // Check if data contains an error message returned by the function
+      if (data && data.error) {
+        return { success: false, error: data.error }
+      }
+      return { success: false, error: error.message || 'Failed to invoke provision-leader function' }
+    }
+
+    if (data?.error) {
+      return { success: false, error: data.error }
+    }
+
+    return {
+      success: true,
+      message: data?.message,
+      userId: data?.userId,
+      email: data?.email,
+      username: data?.username,
+      loginIdentifier: data?.loginIdentifier || data?.username || data?.email,
+    }
+  } catch (err: any) {
+    console.error('provisionLeaderEdgeFunction exception:', err)
+    return { success: false, error: err.message || 'Unexpected network error invoking provision-leader' }
+  }
+}
