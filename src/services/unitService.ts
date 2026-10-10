@@ -17,6 +17,8 @@ export async function fetchStakeUnits(): Promise<StakeUnit[]> {
   return data || []
 }
 
+export const fetchUnits = fetchStakeUnits
+
 /**
  * Assign an authorized user to a stake unit.
  * Validated by database trigger trg_validate_unit_assignment
