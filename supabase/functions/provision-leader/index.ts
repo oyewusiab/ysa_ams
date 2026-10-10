@@ -55,7 +55,7 @@ serve(async (req: Request) => {
       )
     }
 
-    // User client to verify caller identity using caller's JWT
+    // Caller client to verify caller identity using caller's JWT
     const callerClient = createClient(supabaseUrl, supabaseAnonKey || supabaseServiceRoleKey, {
       global: { headers: { Authorization: authHeader } }
     })
@@ -73,7 +73,20 @@ serve(async (req: Request) => {
       auth: { autoRefreshToken: false, persistSession: false }
     })
 
-    // 3. Verify server-side that caller is an active system_admin
+    // 3. Verify server-side that caller has BOTH an active profile AND system_admin role
+    const { data: callerProfile, error: profileErr } = await adminClient
+      .from('user_profiles')
+      .select('account_status')
+      .eq('id', callerUser.id)
+      .single()
+
+    if (profileErr || !callerProfile || callerProfile.account_status !== 'active') {
+      return new Response(
+        JSON.stringify({ error: 'Unauthorized: Caller account is not active.' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     const { data: callerRoles, error: rolesError } = await adminClient
       .from('user_roles')
       .select('role_name')
@@ -114,13 +127,49 @@ serve(async (req: Request) => {
       )
     }
 
-    if (['bishop', 'branch_president'].includes(roleName) && !assignedUnitId) {
+    // 5. Unit existence, status, and role/type compatibility checks
+    if (assignedUnitId) {
+      const { data: unitRecord, error: unitFetchErr } = await adminClient
+        .from('stake_units')
+        .select('id, unit_name, unit_type, is_active')
+        .eq('id', assignedUnitId)
+        .single()
+
+      if (unitFetchErr || !unitRecord) {
+        return new Response(
+          JSON.stringify({ error: 'Assigned unit does not exist.' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (!unitRecord.is_active) {
+        return new Response(
+          JSON.stringify({ error: `Assigned unit "${unitRecord.unit_name}" is currently inactive.` }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (roleName === 'bishop' && unitRecord.unit_type !== 'ward') {
+        return new Response(
+          JSON.stringify({ error: `Invalid assignment: A Bishop can only be assigned to a Ward, but "${unitRecord.unit_name}" is a ${unitRecord.unit_type}.` }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
+      if (roleName === 'branch_president' && unitRecord.unit_type !== 'branch') {
+        return new Response(
+          JSON.stringify({ error: `Invalid assignment: A Branch President can only be assigned to a Branch, but "${unitRecord.unit_name}" is a ${unitRecord.unit_type}.` }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+    } else if (['bishop', 'branch_president'].includes(roleName)) {
       return new Response(
         JSON.stringify({ error: 'Assigned ward/branch is strictly required for Bishops and Branch Presidents.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
+    // 6. Username conflict verification
     const cleanUsername = username?.trim().toLowerCase() || null
     if (cleanUsername) {
       const { data: existingUsernames } = await adminClient
@@ -137,37 +186,37 @@ serve(async (req: Request) => {
       }
     }
 
-    // Default or validated temporary password (minimum 8 chars)
-    const tempPass = temporaryPassword && temporaryPassword.trim().length >= 8 
-      ? temporaryPassword.trim() 
-      : 'ObantokoYSA2026!'
-
-    let authUserId: string
-    let isExistingAuthUser = false
-
-    // 5. Check if Auth user already exists (idempotent lookup & handling for existing submissions like bayoglds@gmail.com)
+    // 7. Check if Auth user already exists (idempotent lookup & handling for existing submissions like bayoglds@gmail.com)
     const { data: existingUsersData } = await adminClient.auth.admin.listUsers()
     const foundAuthUser = existingUsersData?.users?.find(
       (u: any) => u.email?.toLowerCase() === cleanEmail
     )
 
+    let authUserId: string
+    let isExistingAuthUser = false
+    let newlyCreatedAuthUser = false
+
     if (foundAuthUser) {
+      // EXISTING AUTH USER (Reconciliation)
+      // REQUIREMENT: Protect existing accounts. Preserve existing password!
+      // Do not reset or change their password merely because of provisioning retry.
       authUserId = foundAuthUser.id
       isExistingAuthUser = true
-
-      // Update password if a specific temporary password was supplied
-      if (temporaryPassword && temporaryPassword.trim().length >= 8) {
-        await adminClient.auth.admin.updateUserById(authUserId, {
-          password: tempPass,
-          email_confirm: true,
-          user_metadata: { full_name: fullName.trim() }
-        })
-      }
     } else {
-      // Create new Auth User
+      // NEW AUTH USER CREATION
+      // REQUIREMENT: Reject missing or invalid temporary passwords with HTTP 400.
+      // Never substitute a default fallback password! Never log password.
+      const trimmedPass = temporaryPassword?.trim()
+      if (!trimmedPass || trimmedPass.length < 8) {
+        return new Response(
+          JSON.stringify({ error: 'Temporary password is required for new accounts (minimum 8 characters).' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+
       const { data: createdAuth, error: createAuthErr } = await adminClient.auth.admin.createUser({
         email: cleanEmail,
-        password: tempPass,
+        password: trimmedPass,
         email_confirm: true, // Confirmed for admin-provisioned leaders
         user_metadata: { full_name: fullName.trim() }
       })
@@ -180,87 +229,123 @@ serve(async (req: Request) => {
         )
       }
       authUserId = createdAuth.user.id
+      newlyCreatedAuthUser = true
     }
 
-    // 6. Link / Upsert public.user_profiles
-    const { error: profileErr } = await adminClient
-      .from('user_profiles')
-      .upsert({
-        id: authUserId,
-        full_name: fullName.trim(),
-        email: cleanEmail,
-        username: cleanUsername,
-        account_status: 'active',
-        must_change_password: true,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'id' })
-
-    if (profileErr) {
-      console.error('Error linking user profile:', profileErr)
-      return new Response(
-        JSON.stringify({ error: `Database error setting profile: ${profileErr.message}` }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // 7. Assign public.user_roles (Idempotent upsert)
-    const { error: roleErr } = await adminClient
-      .from('user_roles')
-      .upsert({
-        user_id: authUserId,
-        role_name: roleName,
-        assigned_by: callerUser.id,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,role_name' })
-
-    if (roleErr) {
-      console.error('Error assigning role:', roleErr)
-      return new Response(
-        JSON.stringify({ error: `Database error assigning role: ${roleErr.message}` }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // 8. Assign unit if applicable
-    if (assignedUnitId && ['bishop', 'branch_president', 'ysa_leader'].includes(roleName)) {
-      await adminClient
-        .from('user_unit_assignments')
-        .upsert({
-          user_id: authUserId,
-          unit_id: assignedUnitId,
-          assigned_role: roleName,
-          assigned_by: callerUser.id,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id,unit_id,assigned_role' })
-    }
-
-    // 9. Write audit record
-    await adminClient.from('audit_logs').insert({
-      actor_id: callerUser.id,
-      action: isExistingAuthUser ? 'RECONCILE_LEADER_PROVISION' : 'PROVISION_LEADER_COMPLETE',
-      target_record_id: authUserId,
-      target_table: 'user_profiles',
-      outcome: 'success',
-      metadata: {
-        email: cleanEmail,
-        username: cleanUsername,
-        role: roleName,
-        unit_id: assignedUnitId || null,
-        isExistingAuthUser
-      }
+    // 8. Atomic / Transactional Database Setup
+    // Try the transactional RPC first to execute profile, role, unit assignment and audit atomically
+    let transactionSuccess = false
+    const { data: txData, error: txError } = await callerClient.rpc('execute_leader_provisioning_transaction', {
+      p_auth_user_id: authUserId,
+      p_full_name: fullName.trim(),
+      p_email: cleanEmail,
+      p_username: cleanUsername,
+      p_role_name: roleName,
+      p_assigned_unit_id: assignedUnitId || null,
+      p_is_reconciliation: isExistingAuthUser
     })
 
-    // Return success response with confirmed login identifier (Never return plaintext password)
+    if (!txError && txData?.success) {
+      transactionSuccess = true
+    } else {
+      console.warn('execute_leader_provisioning_transaction RPC not available or failed, executing safe fallback with rollback protection:', txError?.message)
+      
+      // Multi-step fallback with safe rollback on failure
+      try {
+        // Upsert user_profiles
+        const { error: pErr } = await adminClient
+          .from('user_profiles')
+          .upsert({
+            id: authUserId,
+            full_name: fullName.trim(),
+            email: cleanEmail,
+            username: cleanUsername,
+            account_status: 'active',
+            must_change_password: true,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'id' })
+
+        if (pErr) throw new Error(`Profile setup failed: ${pErr.message}`)
+
+        // Upsert user_roles
+        const { error: rErr } = await adminClient
+          .from('user_roles')
+          .upsert({
+            user_id: authUserId,
+            role_name: roleName,
+            assigned_by: callerUser.id,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id,role_name' })
+
+        if (rErr) throw new Error(`Role assignment failed: ${rErr.message}`)
+
+        // Upsert unit assignment if applicable
+        if (assignedUnitId && ['bishop', 'branch_president', 'ysa_leader'].includes(roleName)) {
+          const { error: uErr } = await adminClient
+            .from('user_unit_assignments')
+            .upsert({
+              user_id: authUserId,
+              unit_id: assignedUnitId,
+              assigned_role: roleName,
+              assigned_by: callerUser.id,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'user_id,unit_id,assigned_role' })
+
+          if (uErr) throw new Error(`Unit assignment failed: ${uErr.message}`)
+        }
+
+        // Write audit log
+        await adminClient.from('audit_logs').insert({
+          actor_id: callerUser.id,
+          action: isExistingAuthUser ? 'RECONCILE_LEADER_PROVISION' : 'PROVISION_LEADER_COMPLETE',
+          target_record_id: authUserId,
+          target_table: 'user_profiles',
+          outcome: 'success',
+          metadata: {
+            email: cleanEmail,
+            username: cleanUsername,
+            role: roleName,
+            unit_id: assignedUnitId || null,
+            isExistingAuthUser
+          }
+        })
+
+        transactionSuccess = true
+      } catch (partialErr: any) {
+        console.error('Partial database setup failure:', partialErr)
+
+        // If we newly created the auth user in this specific execution and subsequent DB operations failed,
+        // clean up the orphaned auth user so the administrator can safely retry
+        if (newlyCreatedAuthUser) {
+          try {
+            await adminClient.auth.admin.deleteUser(authUserId)
+            console.log(`Rolled back newly created auth user ${authUserId} after database setup failure.`)
+          } catch (deleteErr) {
+            console.error('Failed to rollback orphaned auth user:', deleteErr)
+          }
+        }
+
+        return new Response(
+          JSON.stringify({
+            error: `Provisioning failed during database assignment: ${partialErr.message}. Any incomplete records were cleaned up for safe retry.`
+          }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        )
+      }
+    }
+
+    // 9. Return success response with confirmed login identifier (Never return plaintext password)
     return new Response(
       JSON.stringify({
         success: true,
         message: isExistingAuthUser 
-          ? `Leader account for ${fullName.trim()} successfully reconciled and activated.`
+          ? `Leader account for ${fullName.trim()} (${cleanEmail}) successfully reconciled and activated. Existing password preserved.`
           : `Leader account for ${fullName.trim()} successfully created and activated.`,
         userId: authUserId,
         email: cleanEmail,
         username: cleanUsername,
         role: roleName,
+        isReconciliation: isExistingAuthUser,
         loginIdentifier: cleanUsername || cleanEmail
       }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

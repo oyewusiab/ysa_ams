@@ -3,7 +3,6 @@ import { supabase } from '../lib/supabase'
 import {
   manageUserRoleRPC,
   updateUserAccountStatusRPC,
-  adminProvisionUserRPC,
   provisionLeaderEdgeFunction,
   type UserWithDetails,
 } from '../services/userService'
@@ -27,7 +26,7 @@ export const UserManagement: React.FC = () => {
   const [provRole, setProvRole] = useState<RoleName>('ysa_leader')
   const [provUnitId, setProvUnitId] = useState('')
   const [provMustChangePassword, setProvMustChangePassword] = useState(true)
-  const [provTempPassword, setProvTempPassword] = useState('ObantokoYSA2026!')
+  const [provTempPassword, setProvTempPassword] = useState('')
   const [showTempPassword, setShowTempPassword] = useState(false)
 
   // Unit assignment modal state
@@ -195,11 +194,23 @@ export const UserManagement: React.FC = () => {
       const trimmedUsername = provUsername.trim() || undefined
       const tempPass = provTempPassword.trim()
 
+      if (!trimmedFullName || trimmedFullName.length < 2) {
+        throw new Error('Full name is required (minimum 2 characters).')
+      }
+
+      if (!trimmedEmail || !trimmedEmail.includes('@')) {
+        throw new Error('A valid email address is required.')
+      }
+
       if (!tempPass || tempPass.length < 8) {
         throw new Error('Temporary password must be at least 8 characters.')
       }
 
-      // 1. Try invoking the secure provision-leader Edge Function
+      if (['bishop', 'branch_president'].includes(provRole) && !provUnitId) {
+        throw new Error('Assigned ward/branch is strictly required for Bishops and Branch Presidents.')
+      }
+
+      // Invoke the secure provision-leader Edge Function
       const edgeRes = await provisionLeaderEdgeFunction({
         fullName: trimmedFullName,
         email: trimmedEmail,
@@ -209,40 +220,24 @@ export const UserManagement: React.FC = () => {
         temporaryPassword: tempPass,
       })
 
-      if (edgeRes.success) {
-        const identifier = edgeRes.loginIdentifier || trimmedUsername || trimmedEmail
-        setActionMessage({
-          text: `Account for ${trimmedFullName} successfully provisioned and ready for login! User can log in immediately at /la using identifier "${identifier}".`,
-          type: 'success',
-        })
-      } else {
-        // If Edge function fails due to network/deployment, fall back to registering specification via RPC
-        console.warn('Edge Function returned error, trying fallback to RPC specification:', edgeRes.error)
-        const rpcRes = await adminProvisionUserRPC({
-          fullName: trimmedFullName,
-          email: trimmedEmail,
-          username: trimmedUsername,
-          roleName: provRole,
-          assignedUnitId: provUnitId || undefined,
-          mustChangePassword: provMustChangePassword,
-        })
-
-        if (!rpcRes.success) {
-          throw new Error(edgeRes.error || rpcRes.error || 'Failed to provision leader account')
-        }
-
-        setActionMessage({
-          text: `Specification registered for ${trimmedFullName} (${provRole}). Note: ${edgeRes.error || 'Edge function provision completed fallback'}.`,
-          type: 'success',
-        })
+      if (!edgeRes.success) {
+        // Explicit failure: DO NOT fall back to RPC specification registration or claim ready for login
+        throw new Error(edgeRes.error || 'Provisioning service failed. Please check inputs and retry.')
       }
 
+      const identifier = edgeRes.loginIdentifier || trimmedUsername || trimmedEmail
+      setActionMessage({
+        text: `Account for ${trimmedFullName} successfully provisioned and ready for login! User can log in immediately at /la using identifier "${identifier}".`,
+        type: 'success',
+      })
+
+      // Only close modal and reset form upon verified success
       setShowProvisionModal(false)
       setProvFullName('')
       setProvEmail('')
       setProvUsername('')
       setProvUnitId('')
-      setProvTempPassword('ObantokoYSA2026!')
+      setProvTempPassword('')
       await loadData()
     } catch (err: any) {
       setActionMessage({ text: err.message || 'Provisioning failed', type: 'error' })
