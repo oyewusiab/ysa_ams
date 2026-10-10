@@ -172,14 +172,14 @@ export const DashboardOverview: React.FC = () => {
             </p>
           </div>
 
-          {/* Phase 3 Forthcoming Modules */}
-          <div className="p-3 bg-white rounded-lg border border-dashed border-amber-300 text-xs">
+          {/* Phase 3 Complete Reporting & Analytics */}
+          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
             <div className="flex items-center justify-between mb-1">
-              <span className="font-semibold text-slate-700">Stake Analytics & Registers</span>
-              <span className="px-2 py-0.5 bg-amber-50 text-amber-800 font-medium rounded text-[10px]">PHASE 3 UPCOMING</span>
+              <span className="font-semibold text-slate-800">Stake Analytics & Registers</span>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-bold rounded text-[10px]">IMPLEMENTED</span>
             </div>
-            <p className="text-slate-400 text-[11px]">
-              Monthly attendance registers, ward summaries, CSV/PDF export generation.
+            <p className="text-slate-500 text-[11px]">
+              Monthly attendance registers, ward/branch performance, CSV/XLSX/PDF exports.
             </p>
           </div>
         </div>

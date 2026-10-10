@@ -176,11 +176,14 @@ export interface TerminalAuthorization {
   created_at: string
 }
 
+export type AttendanceStatus = 'present' | 'excused'
+
 export interface AttendanceRecord {
   id: string
   session_id: string
   member_id: string
   recorded_unit_id: string
+  attendance_status?: AttendanceStatus
   recorded_by_terminal_id: string | null
   marked_by_user: string | null
   check_in_time: string
@@ -188,6 +191,102 @@ export interface AttendanceRecord {
   updated_at: string
   member?: Member
   recorded_unit?: StakeUnit
+}
+
+// -----------------------------------------------------------------------------
+// Phase 3 Types: Reporting, Registers, Unit Summaries & Analytics
+// -----------------------------------------------------------------------------
+
+export interface MonthlyRegisterMemberRow {
+  member_id: string
+  full_name: string
+  preferred_name: string | null
+  home_unit_id: string
+  unit_name: string
+  unit_type: StakeUnitType
+  eligible_sessions_count: number
+  attended_count: number
+  excused_count: number
+  absent_count: number
+  attendance_percentage: number
+  activity_statuses: Record<string, 'present' | 'excused' | 'absent' | 'ineligible'>
+}
+
+export interface UnitMonthlyReport {
+  unit_id: string
+  unit_name: string
+  unit_type: StakeUnitType
+  registered_ysa_count: number
+  eligible_sessions_count: number
+  total_attendance_instances: number
+  total_absences: number
+  total_excused: number
+  overall_attendance_percentage: number
+  previous_month_percentage: number | null
+  percentage_change: number | null
+  zero_attendance_members: { id: string; full_name: string }[]
+  low_participation_activities: { session_id: string; title: string; session_date: string; attendance_count: number; percentage: number }[]
+  member_rows: MonthlyRegisterMemberRow[]
+}
+
+export interface StakeAnalyticsSummary {
+  reporting_year: number
+  reporting_month: number
+  total_registered_ysa: number
+  active_units_count: number
+  finalized_sessions_count: number
+  pending_sessions_count: number
+  total_attendance_instances: number
+  total_excused_instances: number
+  overall_attendance_percentage: number
+  previous_month_overall_percentage: number | null
+  pending_reopening_requests: number
+  attendance_corrections_count: number
+  unit_breakdown: {
+    unit_id: string
+    unit_name: string
+    unit_type: StakeUnitType
+    registered_ysa_count: number
+    finalized_sessions_count: number
+    attendance_count: number
+    attendance_percentage: number
+    zero_attendance_count: number
+  }[]
+  monthly_trends: {
+    month_name: string
+    year: number
+    month: number
+    attendance_count: number
+    finalized_sessions_count: number
+    attendance_percentage: number
+  }[]
+  category_breakdown: {
+    category: ActivityCategory
+    sessions_count: number
+    attendance_count: number
+  }[]
+}
+
+export interface MemberAttendanceHistoryItem {
+  session_id: string
+  session_title: string
+  session_date: string
+  category: ActivityCategory
+  status: SessionStatus // 'draft' | 'active' | 'closed'
+  attendance_status: 'present' | 'excused' | 'absent'
+  recorded_unit_name: string
+  recorded_unit_type: string
+  check_in_time: string | null
+}
+
+export interface MemberAttendanceProfile {
+  member: Member
+  total_eligible_sessions: number
+  total_attended: number
+  total_excused: number
+  total_absent: number
+  overall_percentage: number
+  history: MemberAttendanceHistoryItem[]
 }
 
 export interface SessionVisitor {

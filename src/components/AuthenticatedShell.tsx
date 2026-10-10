@@ -8,6 +8,9 @@ import { MemberManagementView } from './MemberManagementView'
 import { ActivityManagementView } from './ActivityManagementView'
 import { AttendanceTerminalView } from './AttendanceTerminalView'
 import { ReopeningApprovalsView } from './ReopeningApprovalsView'
+import { AttendanceReportsView } from './AttendanceReportsView'
+import { UnitReportsView } from './UnitReportsView'
+import { StakeAnalyticsDashboard } from './StakeAnalyticsDashboard'
 import { 
   Shield, 
   Users, 
@@ -21,7 +24,9 @@ import {
   Calendar,
   Smartphone,
   UserCheck,
-  RotateCcw
+  RotateCcw,
+  BarChart3,
+  ClipboardList
 } from 'lucide-react'
 import { formatUserRoles } from '../types/database'
 
@@ -30,6 +35,9 @@ type NavigationTab =
   | 'activities' 
   | 'terminal' 
   | 'members' 
+  | 'reports'
+  | 'unit-reports'
+  | 'analytics'
   | 'reopening' 
   | 'users' 
   | 'units' 
@@ -139,6 +147,49 @@ export const AuthenticatedShell: React.FC = () => {
                 >
                   <UserCheck className="w-4 h-4" />
                   YSA Register
+                </button>
+              )}
+
+              {/* Phase 3.1: Monthly Attendance Registers & Individual YSA History */}
+              <button
+                onClick={() => setActiveTab('reports')}
+                className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
+                  activeTab === 'reports'
+                    ? 'bg-emerald-50 text-emerald-800 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <ClipboardList className="w-4 h-4 text-emerald-700" />
+                Reports
+              </button>
+
+              {/* Phase 3.2: Ward & Branch Reports */}
+              {canViewMembers && (
+                <button
+                  onClick={() => setActiveTab('unit-reports')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
+                    activeTab === 'unit-reports'
+                      ? 'bg-emerald-50 text-emerald-800 font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <Building2 className="w-4 h-4 text-emerald-700" />
+                  Unit Reports
+                </button>
+              )}
+
+              {/* Phase 3.3: Stake Presidency Analytics */}
+              {(isAdmin || isStakePresidency) && (
+                <button
+                  onClick={() => setActiveTab('analytics')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
+                    activeTab === 'analytics'
+                      ? 'bg-emerald-50 text-emerald-800 font-semibold'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                  }`}
+                >
+                  <BarChart3 className="w-4 h-4 text-emerald-700" />
+                  Stake Analytics
                 </button>
               )}
 
@@ -265,6 +316,31 @@ export const AuthenticatedShell: React.FC = () => {
                 YSA Register
               </button>
             )}
+            <button
+              onClick={() => { setActiveTab('reports'); setMobileMenuOpen(false) }}
+              className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+            >
+              <ClipboardList className="w-4 h-4 text-emerald-700" />
+              Attendance Reports
+            </button>
+            {canViewMembers && (
+              <button
+                onClick={() => { setActiveTab('unit-reports'); setMobileMenuOpen(false) }}
+                className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+              >
+                <Building2 className="w-4 h-4 text-emerald-700" />
+                Unit Reports
+              </button>
+            )}
+            {(isAdmin || isStakePresidency) && (
+              <button
+                onClick={() => { setActiveTab('analytics'); setMobileMenuOpen(false) }}
+                className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+              >
+                <BarChart3 className="w-4 h-4 text-emerald-700" />
+                Stake Analytics
+              </button>
+            )}
             {canApproveReopen && (
               <button
                 onClick={() => { setActiveTab('reopening'); setMobileMenuOpen(false) }}
@@ -323,6 +399,9 @@ export const AuthenticatedShell: React.FC = () => {
         {activeTab === 'activities' && canManageActivities && <ActivityManagementView />}
         {activeTab === 'terminal' && <AttendanceTerminalView />}
         {activeTab === 'members' && canViewMembers && <MemberManagementView />}
+        {activeTab === 'reports' && <AttendanceReportsView />}
+        {activeTab === 'unit-reports' && canViewMembers && <UnitReportsView />}
+        {activeTab === 'analytics' && (isAdmin || isStakePresidency) && <StakeAnalyticsDashboard />}
         {activeTab === 'reopening' && canApproveReopen && <ReopeningApprovalsView />}
         {activeTab === 'users' && isAdmin && <UserManagement />}
         {activeTab === 'units' && isAdmin && <StakeUnitsView />}
