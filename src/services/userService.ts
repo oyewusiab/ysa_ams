@@ -199,12 +199,25 @@ export async function provisionLeaderEdgeFunction(params: {
     })
 
     if (error) {
-      console.warn('Edge function invoke error, inspecting response or falling back:', error)
-      // Check if data contains an error message returned by the function
+      console.warn('Edge function invoke error, inspecting response:', error)
+      let detailedError = error.message
+
+      // supabase-js FunctionsHttpError often attaches the response JSON in error.context
+      if ((error as any).context && typeof (error as any).context.json === 'function') {
+        try {
+          const errBody = await (error as any).context.json()
+          if (errBody && errBody.error) {
+            detailedError = errBody.error
+          }
+        } catch (_) {
+          // ignore json parse errors
+        }
+      }
+
       if (data && data.error) {
         return { success: false, error: data.error }
       }
-      return { success: false, error: error.message || 'Failed to invoke provision-leader function' }
+      return { success: false, error: detailedError || 'Failed to invoke provision-leader function' }
     }
 
     if (data?.error) {
