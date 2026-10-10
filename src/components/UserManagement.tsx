@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { manageUserRoleRPC, updateUserAccountStatusRPC, type UserWithDetails } from '../services/userService'
+import { manageUserRoleRPC, updateUserAccountStatusRPC, adminProvisionUserRPC, type UserWithDetails } from '../services/userService'
 import { fetchStakeUnits, assignUserToUnit, revokeUserUnitAssignment } from '../services/unitService'
 import type { StakeUnit, RoleName } from '../types/database'
-import { Users, Building2, CheckCircle2, AlertCircle, RefreshCw, X } from 'lucide-react'
+import { Users, Building2, CheckCircle2, AlertCircle, RefreshCw, X, UserPlus } from 'lucide-react'
 
 export const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<UserWithDetails[]>([])
@@ -12,6 +12,15 @@ export const UserManagement: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  // Provisioning modal state
+  const [showProvisionModal, setShowProvisionModal] = useState(false)
+  const [provFullName, setProvFullName] = useState('')
+  const [provEmail, setProvEmail] = useState('')
+  const [provUsername, setProvUsername] = useState('')
+  const [provRole, setProvRole] = useState<RoleName>('ysa_leader')
+  const [provUnitId, setProvUnitId] = useState('')
+  const [provMustChangePassword, setProvMustChangePassword] = useState(true)
 
   // Unit assignment modal state
   const [assignmentModalUser, setAssignmentModalUser] = useState<UserWithDetails | null>(null)
@@ -167,6 +176,42 @@ export const UserManagement: React.FC = () => {
     )
   })
 
+  const handleProvisionUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setActionMessage(null)
+    setActionLoading('provision')
+
+    try {
+      const res = await adminProvisionUserRPC({
+        fullName: provFullName.trim(),
+        email: provEmail.trim().toLowerCase(),
+        username: provUsername.trim() || undefined,
+        roleName: provRole,
+        assignedUnitId: provUnitId || undefined,
+        mustChangePassword: provMustChangePassword
+      })
+
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to provision user')
+      }
+
+      setActionMessage({
+        text: `Specification registered for ${provFullName} (${provRole}). Next: create their authentication login in Supabase Auth Console with their temporary password.`,
+        type: 'success'
+      })
+      setShowProvisionModal(false)
+      setProvFullName('')
+      setProvEmail('')
+      setProvUsername('')
+      setProvUnitId('')
+      await loadData()
+    } catch (err: any) {
+      setActionMessage({ text: err.message || 'Provisioning failed', type: 'error' })
+    } finally {
+      setActionLoading(null)
+    }
+  }
+
   const ALL_ROLES: RoleName[] = [
     'system_admin',
     'ysa_leader',
@@ -190,6 +235,13 @@ export const UserManagement: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowProvisionModal(true)}
+            className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
+          >
+            <UserPlus className="w-4 h-4" />
+            Provision Leader
+          </button>
           <input
             type="text"
             placeholder="Search by name or email..."
@@ -420,6 +472,141 @@ export const UserManagement: React.FC = () => {
                   className="px-4 py-2 bg-emerald-700 text-white rounded-md text-sm font-medium hover:bg-emerald-800 disabled:opacity-50 cursor-pointer"
                 >
                   {actionLoading === 'unit-assign' ? 'Assigning...' : 'Save Unit Assignment'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Account Provisioning Modal */}
+      {showProvisionModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-4">
+              <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-emerald-700" />
+                Provision Leader or Administrator Account
+              </h3>
+              <button
+                onClick={() => setShowProvisionModal(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-500 mb-4">
+              Creates a controlled account specification. Public registration for leaders is disallowed.
+            </p>
+
+            <form onSubmit={handleProvisionUser} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                  Full Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Samuel Olaniyan"
+                  value={provFullName}
+                  onChange={(e) => setProvFullName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Email Address *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="user@domain.com"
+                    value={provEmail}
+                    onChange={(e) => setProvEmail(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Username (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. solaniyan"
+                    value={provUsername}
+                    onChange={(e) => setProvUsername(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Leadership Role *
+                  </label>
+                  <select
+                    value={provRole}
+                    onChange={(e: any) => setProvRole(e.target.value)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                  >
+                    <option value="ysa_leader">YSA Leader</option>
+                    <option value="system_admin">System Administrator</option>
+                    <option value="stake_presidency">Stake Presidency</option>
+                    <option value="bishop">Bishop (Ward)</option>
+                    <option value="branch_president">Branch President (Branch)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Assigned Unit
+                  </label>
+                  <select
+                    value={provUnitId}
+                    onChange={(e) => setProvUnitId(e.target.value)}
+                    disabled={!['bishop', 'branch_president', 'ysa_leader'].includes(provRole)}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="">None / Stake-Wide</option>
+                    {units.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.unit_name} ({u.unit_type})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="mustChangeToggle"
+                  checked={provMustChangePassword}
+                  onChange={(e) => setProvMustChangePassword(e.target.checked)}
+                  className="h-4 w-4 text-emerald-600 rounded border-slate-300 cursor-pointer"
+                />
+                <label htmlFor="mustChangeToggle" className="text-xs text-slate-700 font-medium cursor-pointer">
+                  Require password change on first successful login
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setShowProvisionModal(false)}
+                  className="px-4 py-2 border border-slate-300 rounded-lg text-sm text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={actionLoading === 'provision'}
+                  className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-bold hover:bg-emerald-800 disabled:opacity-50 cursor-pointer shadow-xs"
+                >
+                  {actionLoading === 'provision' ? 'Provisioning...' : 'Register Provisioning'}
                 </button>
               </div>
             </form>

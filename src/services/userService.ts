@@ -95,3 +95,58 @@ export async function bootstrapInitialAdminRPC(): Promise<{ success: boolean; me
 
   return { success: true, ...data }
 }
+
+/**
+ * Resolve username or email securely for authentication
+ */
+export async function resolveAuthIdentifierRPC(identifier: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.rpc('resolve_auth_identifier', {
+      p_identifier: identifier
+    })
+    if (error) throw error
+    return data
+  } catch (err) {
+    // If identifier contains @, fallback to it directly
+    if (identifier.includes('@')) return identifier.toLowerCase().trim()
+    return null
+  }
+}
+
+/**
+ * Admin provisioning for leadership accounts
+ */
+export async function adminProvisionUserRPC(params: {
+  fullName: string
+  email: string
+  username?: string
+  roleName: RoleName
+  assignedUnitId?: string
+  mustChangePassword?: boolean
+}): Promise<{ success: boolean; message?: string; error?: string }> {
+  const { data, error } = await supabase.rpc('admin_provision_user', {
+    p_full_name: params.fullName,
+    p_email: params.email,
+    p_username: params.username || null,
+    p_role_name: params.roleName,
+    p_assigned_unit_id: params.assignedUnitId || null,
+    p_initial_must_change_password: params.mustChangePassword ?? true
+  })
+
+  if (error) {
+    return { success: false, error: error.message }
+  }
+
+  return { success: true, ...data }
+}
+
+/**
+ * Mark first-login password change completed
+ */
+export async function completeFirstLoginPasswordChangeRPC(): Promise<{ success: boolean; error?: string }> {
+  const { data, error } = await supabase.rpc('complete_first_login_password_change')
+  if (error) {
+    return { success: false, error: error.message }
+  }
+  return { success: true, ...data }
+}

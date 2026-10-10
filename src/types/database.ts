@@ -22,6 +22,8 @@ export interface UserProfile {
   id: string
   full_name: string
   email: string | null
+  username?: string | null
+  must_change_password?: boolean
   account_status: AccountStatus
   created_at: string
   updated_at: string
