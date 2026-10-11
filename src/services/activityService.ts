@@ -13,7 +13,7 @@ export async function fetchActivities(): Promise<Activity[]> {
   try {
     const { data, error } = await supabase
       .from('activities')
-      .select('*, creator_profile:user_profiles(full_name)')
+      .select('*, creator_profile:user_profiles!created_by(full_name)')
       .order('created_at', { ascending: false })
 
     if (error) throw error
@@ -64,7 +64,7 @@ export async function createActivity(activity: Partial<Activity>): Promise<Activ
       ...activity,
       created_by: createdBy
     }])
-    .select('*, creator_profile:user_profiles(full_name)')
+    .select('*, creator_profile:user_profiles!created_by(full_name)')
     .single()
 
   if (error) throw error
@@ -97,6 +97,7 @@ export async function createSession(sessionData: Partial<ActivitySession>): Prom
     .from('activity_sessions')
     .insert([{
       ...sessionData,
+      enable_time_in: sessionData.enable_time_in ?? false,
       status: 'draft',
       timezone: 'Africa/Lagos'
     }])

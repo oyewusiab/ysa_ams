@@ -153,8 +153,8 @@ export const MemberAttendanceHistoryModal: React.FC<Props> = ({ profile, onClose
                         <span>Recorded Unit: <strong className="text-slate-700">{item.recorded_unit_name}</strong></span>
                         {item.check_in_time && (
                           <span className="flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5" />
-                            {new Date(item.check_in_time).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Time In: <strong className="text-slate-700 font-mono">{new Date(item.check_in_time).toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' })} WAT</strong></span>
                           </span>
                         )}
                       </div>

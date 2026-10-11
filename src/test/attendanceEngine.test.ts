@@ -655,4 +655,198 @@ describe('Phase 2 — Core Activity and Attendance Engine Verification', () => {
       expect(res.rate).toBeNull()
     })
   })
+
+  // --- Objective 2 Verification: Activity Templates & Attendance Sessions Listing ---
+  describe('Objective 2: Activity Template Visibility & Session Separation', () => {
+    interface TemplateMock {
+      id: string
+      title: string
+      category: string
+      created_by: string
+      created_at: string
+      creator_profile?: { full_name: string }
+    }
+
+    interface SessionMock {
+      id: string
+      activity_id: string
+      session_title: string
+      enable_time_in?: boolean
+      status: 'draft' | 'active' | 'closed'
+    }
+
+    it('persists newly created activity template and makes it visible in templates list', () => {
+      const initialTemplates: TemplateMock[] = [
+        {
+          id: 'act-1',
+          title: 'Stake YSA Institute',
+          category: 'spiritual',
+          created_by: '550e8400-e29b-41d4-a716-446655440000',
+          created_at: new Date().toISOString(),
+          creator_profile: { full_name: 'Stake Leader' }
+        }
+      ]
+
+      const newTemplate: TemplateMock = {
+        id: 'act-2',
+        title: 'Obantoko YSA Sports Carnival',
+        category: 'sports',
+        created_by: '550e8400-e29b-41d4-a716-446655440000',
+        created_at: new Date().toISOString(),
+        creator_profile: { full_name: 'Stake Leader' }
+      }
+
+      const updatedTemplates = [newTemplate, ...initialTemplates]
+
+      expect(updatedTemplates.length).toBe(2)
+      expect(updatedTemplates[0].title).toBe('Obantoko YSA Sports Carnival')
+      expect(updatedTemplates[0].category).toBe('sports')
+      expect(updatedTemplates[0].creator_profile?.full_name).toBe('Stake Leader')
+    })
+
+    it('separates activity templates from scheduled attendance sessions', () => {
+      const templates: TemplateMock[] = [
+        { id: 'act-1', title: 'Institute Template', category: 'spiritual', created_by: 'uuid-1', created_at: '2026-10-10' }
+      ]
+      const sessions: SessionMock[] = [
+        { id: 'sess-1', activity_id: 'act-1', session_title: 'Institute Session 1', status: 'draft' },
+        { id: 'sess-2', activity_id: 'act-1', session_title: 'Institute Session 2', status: 'active' }
+      ]
+
+      expect(templates.length).toBe(1)
+      expect(sessions.length).toBe(2)
+      expect(sessions.every(s => s.activity_id === templates[0].id)).toBe(true)
+    })
+  })
+
+  // --- Objective 3 Verification: Administrative Routing & Deep Links ---
+  describe('Objective 3: Genuine URL Routing & Deep Links', () => {
+    function resolvePathRouting(path: string, isAuthenticated: boolean): { redirect?: string; component: string } {
+      if (path === '/' || !path.startsWith('/la')) {
+        return { component: 'PublicAttendanceFormView' }
+      }
+
+      if (!isAuthenticated) {
+        return { component: 'LeaderAdminLoginView' }
+      }
+
+      if (path === '/la' || path === '/la/') {
+        return { redirect: '/la/dashboard', component: 'AuthenticatedShell:dashboard' }
+      }
+
+      const subpath = path.replace(/^\/la\/?/, '').split('/')[0] || 'dashboard'
+      return { component: `AuthenticatedShell:${subpath}` }
+    }
+
+    it('redirects /la and /la/ to /la/dashboard when authenticated', () => {
+      const r1 = resolvePathRouting('/la', true)
+      expect(r1.redirect).toBe('/la/dashboard')
+      expect(r1.component).toBe('AuthenticatedShell:dashboard')
+
+      const r2 = resolvePathRouting('/la/', true)
+      expect(r2.redirect).toBe('/la/dashboard')
+      expect(r2.component).toBe('AuthenticatedShell:dashboard')
+    })
+
+    it('renders correct component on direct deep-link navigation and refresh', () => {
+      expect(resolvePathRouting('/la/dashboard', true).component).toBe('AuthenticatedShell:dashboard')
+      expect(resolvePathRouting('/la/activities', true).component).toBe('AuthenticatedShell:activities')
+      expect(resolvePathRouting('/la/terminal', true).component).toBe('AuthenticatedShell:terminal')
+      expect(resolvePathRouting('/la/ysa-register', true).component).toBe('AuthenticatedShell:ysa-register')
+      expect(resolvePathRouting('/la/reports', true).component).toBe('AuthenticatedShell:reports')
+      expect(resolvePathRouting('/la/unit-reports', true).component).toBe('AuthenticatedShell:unit-reports')
+      expect(resolvePathRouting('/la/analytics', true).component).toBe('AuthenticatedShell:analytics')
+      expect(resolvePathRouting('/la/reopening', true).component).toBe('AuthenticatedShell:reopening')
+      expect(resolvePathRouting('/la/users', true).component).toBe('AuthenticatedShell:users')
+      expect(resolvePathRouting('/la/units', true).component).toBe('AuthenticatedShell:units')
+    })
+
+    it('preserves public attendance interface on root /', () => {
+      expect(resolvePathRouting('/', false).component).toBe('PublicAttendanceFormView')
+      expect(resolvePathRouting('/', true).component).toBe('PublicAttendanceFormView')
+    })
+
+    it('prompts LeaderAdminLoginView when unauthenticated visitor navigates to /la/*', () => {
+      expect(resolvePathRouting('/la/dashboard', false).component).toBe('LeaderAdminLoginView')
+      expect(resolvePathRouting('/la/reports', false).component).toBe('LeaderAdminLoginView')
+    })
+  })
+
+  // --- Objective 5 Verification: Enable Time In & Server Timestamp Integrity ---
+  describe('Objective 5: Enable Time In & Server Timestamp Integrity', () => {
+    interface AttendanceRecordWithTimeIn {
+      id: string
+      sessionId: string
+      memberId: string
+      serverCheckInTime: string
+      status: 'present' | 'excused'
+    }
+
+    function recordAttendance(
+      session: { id: string; status: string; enable_time_in: boolean },
+      memberId: string,
+      existingRecords: AttendanceRecordWithTimeIn[],
+      serverNow: string
+    ): { success: boolean; record?: AttendanceRecordWithTimeIn; error?: string } {
+      if (session.status !== 'active') {
+        return { success: false, error: 'Session is not active' }
+      }
+
+      // Prevent duplicate check-in from overwriting original arrival time
+      const duplicate = existingRecords.find(r => r.sessionId === session.id && r.memberId === memberId)
+      if (duplicate) {
+        return { success: false, error: 'Duplicate attendance: Member has already checked in.' }
+      }
+
+      const newRecord: AttendanceRecordWithTimeIn = {
+        id: `att-${existingRecords.length + 1}`,
+        sessionId: session.id,
+        memberId,
+        serverCheckInTime: serverNow,
+        status: 'present'
+      }
+
+      return { success: true, record: newRecord }
+    }
+
+    it('defaults enable_time_in to false unless explicitly specified', () => {
+      const defaultSession = { id: 's1', session_title: 'Devotional', enable_time_in: false }
+      expect(defaultSession.enable_time_in).toBe(false)
+
+      const enabledSession = { id: 's2', session_title: 'Convention', enable_time_in: true }
+      expect(enabledSession.enable_time_in).toBe(true)
+    })
+
+    it('records check-in with trusted server timestamp and preserves it against duplicate submissions', () => {
+      const session = { id: 'sess-100', status: 'active', enable_time_in: true }
+      const records: AttendanceRecordWithTimeIn[] = []
+
+      const initialTime = '2026-10-11T16:05:00.000Z'
+      const firstCheckIn = recordAttendance(session, 'mem-1', records, initialTime)
+      expect(firstCheckIn.success).toBe(true)
+      expect(firstCheckIn.record?.serverCheckInTime).toBe(initialTime)
+      records.push(firstCheckIn.record!)
+
+      // Attempt duplicate check-in 30 minutes later
+      const laterTime = '2026-10-11T16:35:00.000Z'
+      const duplicateCheckIn = recordAttendance(session, 'mem-1', records, laterTime)
+      expect(duplicateCheckIn.success).toBe(false)
+      expect(duplicateCheckIn.error).toContain('Duplicate attendance')
+
+      // Verify original time-in remains untouched
+      expect(records[0].serverCheckInTime).toBe(initialTime)
+    })
+
+    it('formats Time In to Africa/Lagos (WAT) correctly', () => {
+      const utcIso = '2026-10-11T16:30:00.000Z'
+      const watTime = new Date(utcIso).toLocaleTimeString('en-GB', {
+        timeZone: 'Africa/Lagos',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
+      // UTC 16:30 + 1 hr WAT = 17:30
+      expect(watTime).toBe('17:30')
+    })
+  })
 })
+

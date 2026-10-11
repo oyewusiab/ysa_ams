@@ -148,6 +148,7 @@ export interface ActivitySession {
   participating_units: string[] | null
   eligibility_rule: EligibilityRule
   visitor_registration_enabled: boolean
+  enable_time_in?: boolean
   max_terminals: number
   code_hash?: string | null
   code_expires_at: string | null

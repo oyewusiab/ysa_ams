@@ -229,7 +229,10 @@ export const SessionMonitoringModal: React.FC<Props> = ({ session, onClose }) =>
                             {r.recorded_unit?.unit_name || 'Unit'}
                           </td>
                           <td className="px-4 py-2.5 text-slate-500">
-                            {new Date(r.check_in_time).toLocaleTimeString('en-GB')}
+                            <span className="font-mono font-medium text-slate-700">
+                              {new Date(r.check_in_time).toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-1">WAT</span>
                           </td>
                           <td className="px-4 py-2.5 text-right space-x-2">
                             <button
@@ -274,6 +277,7 @@ export const SessionMonitoringModal: React.FC<Props> = ({ session, onClose }) =>
                         <th className="px-4 py-2 font-semibold">Location / Stake</th>
                         <th className="px-4 py-2 font-semibold">Contact</th>
                         <th className="px-4 py-2 font-semibold">Member</th>
+                        <th className="px-4 py-2 font-semibold">Time In</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -284,6 +288,12 @@ export const SessionMonitoringModal: React.FC<Props> = ({ session, onClose }) =>
                           <td className="px-4 py-2 text-slate-500">{v.contact_phone || '—'}</td>
                           <td className="px-4 py-2">
                             {v.is_church_member ? 'Church Member' : 'Guest'}
+                          </td>
+                          <td className="px-4 py-2 text-slate-500">
+                            <span className="font-mono font-medium text-slate-700">
+                              {new Date(v.created_at).toLocaleTimeString('en-GB', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                            </span>
+                            <span className="text-[10px] text-slate-400 ml-1">WAT</span>
                           </td>
                         </tr>
                       ))}

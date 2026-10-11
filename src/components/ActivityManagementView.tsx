@@ -11,7 +11,11 @@ import {
   Lock, 
   RotateCcw, 
   ShieldCheck, 
-  AlertTriangle 
+  AlertTriangle,
+  Layers,
+  Sparkles,
+  Tag,
+  User
 } from 'lucide-react'
 import { 
   fetchActivities, 
@@ -30,6 +34,7 @@ export const ActivityManagementView: React.FC = () => {
   const { user } = useAuth()
   const [activities, setActivities] = useState<Activity[]>([])
   const [sessions, setSessions] = useState<ActivitySession[]>([])
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -53,12 +58,14 @@ export const ActivityManagementView: React.FC = () => {
   const [startTime, setStartTime] = useState('17:00')
   const [endTime, setEndTime] = useState('19:30')
   const [visitorEnabled, setVisitorEnabled] = useState(true)
+  const [enableTimeIn, setEnableTimeIn] = useState(false)
 
   // Initiate Session form
   const [maxTerminals, setMaxTerminals] = useState<number>(2)
   const [customCode, setCustomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString())
 
   const loadAll = async () => {
+    setLoading(true)
     setError(null)
     try {
       const [acts, sessList] = await Promise.all([
@@ -71,7 +78,9 @@ export const ActivityManagementView: React.FC = () => {
         setSelectedActId(acts[0].id)
       }
     } catch (err: any) {
-      setError(err.message || 'Error loading activities')
+      setError(err.message || 'Error loading activities and sessions')
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -95,14 +104,21 @@ export const ActivityManagementView: React.FC = () => {
         visitor_registration_default: true,
         created_by: user.id
       })
-      setSuccess(`Activity "${actTitle}" created.`)
+      setSuccess(`Activity template "${actTitle}" created successfully.`)
       setShowCreateActModal(false)
       setActTitle('')
       setActDesc('')
-      loadAll()
+      setActCategory('spiritual')
+      await loadAll()
     } catch (err: any) {
-      setError(err.message || 'Failed to create activity')
+      setError(err.message || 'Failed to create activity template')
     }
+  }
+
+  const handleOpenScheduleForTemplate = (act: Activity) => {
+    setSelectedActId(act.id)
+    setSessTitle(`${act.title} — ${new Date().toLocaleDateString('en-GB')}`)
+    setShowCreateSessModal(true)
   }
 
   const handleCreateSession = async (e: React.FormEvent) => {
@@ -116,13 +132,15 @@ export const ActivityManagementView: React.FC = () => {
         start_time: `${startTime}:00`,
         scheduled_end_time: endTime ? `${endTime}:00` : null,
         visitor_registration_enabled: visitorEnabled,
+        enable_time_in: enableTimeIn,
         eligibility_rule: 'all_ysa',
         max_terminals: 2
       })
       setSuccess(`Attendance session "${sessTitle}" scheduled.`)
       setShowCreateSessModal(false)
       setSessTitle('')
-      loadAll()
+      setEnableTimeIn(false)
+      await loadAll()
     } catch (err: any) {
       setError(err.message || 'Failed to schedule session')
     }
@@ -141,7 +159,7 @@ export const ActivityManagementView: React.FC = () => {
       )
       setSuccess(`Session activated! Attendance Code: ${customCode} (Max Terminals: ${maxTerminals})`)
       setShowInitiateModal(null)
-      loadAll()
+      await loadAll()
     } catch (err: any) {
       setError(err.message || 'Failed to initiate attendance session')
     }
@@ -155,7 +173,7 @@ export const ActivityManagementView: React.FC = () => {
     try {
       await closeSession(session.id)
       setSuccess(`Session closed successfully. Subsequent writes blocked.`)
-      loadAll()
+      await loadAll()
     } catch (err: any) {
       setError(err.message || 'Failed to close session')
     }
@@ -175,9 +193,28 @@ export const ActivityManagementView: React.FC = () => {
     }
   }
 
+  const getCategoryBadgeClass = (category: string) => {
+    switch (category) {
+      case 'spiritual':
+        return 'bg-purple-100 text-purple-800 border-purple-200'
+      case 'social':
+        return 'bg-sky-100 text-sky-800 border-sky-200'
+      case 'service':
+        return 'bg-emerald-100 text-emerald-800 border-emerald-200'
+      case 'sports':
+        return 'bg-amber-100 text-amber-800 border-amber-200'
+      case 'temple':
+        return 'bg-indigo-100 text-indigo-800 border-indigo-200'
+      case 'educational':
+        return 'bg-blue-100 text-blue-800 border-blue-200'
+      default:
+        return 'bg-slate-100 text-slate-700 border-slate-200'
+    }
+  }
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
+    <div className="space-y-8">
+      {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
@@ -185,20 +222,26 @@ export const ActivityManagementView: React.FC = () => {
             Activity & Session Management
           </h1>
           <p className="text-sm text-slate-600 mt-1">
-            Design activity definitions, launch attendance sessions, configure terminal limits and codes.
+            Design reusable activity templates and operationalize scheduled attendance sessions.
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowCreateActModal(true)}
-            className="px-3 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer shadow-xs"
+            className="px-3.5 py-2 bg-white border border-slate-200 text-slate-700 rounded-lg text-sm font-semibold hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
-            <PlusCircle className="w-4 h-4 text-slate-500" />
+            <PlusCircle className="w-4 h-4 text-emerald-600" />
             New Activity Template
           </button>
           <button
-            onClick={() => setShowCreateSessModal(true)}
+            onClick={() => {
+              if (activities.length > 0 && !selectedActId) {
+                setSelectedActId(activities[0].id)
+                setSessTitle(`${activities[0].title} — ${new Date().toLocaleDateString('en-GB')}`)
+              }
+              setShowCreateSessModal(true)
+            }}
             className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-sm font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
           >
             <Play className="w-4 h-4" />
@@ -207,6 +250,7 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       </div>
 
+      {/* Notifications */}
       {error && (
         <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-sm rounded-lg flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -221,114 +265,237 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       )}
 
-      {/* Sessions Grid */}
-      <div className="grid grid-cols-1 gap-4">
-        <h2 className="text-base font-bold text-slate-900">Attendance Sessions</h2>
+      {/* SECTION A: ACTIVITY TEMPLATES */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Layers className="w-5 h-5 text-indigo-600" />
+              Activity Templates
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 ml-1">
+                {activities.length}
+              </span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Reusable activity definitions accessible for session scheduling across wards and the stake.
+            </p>
+          </div>
+        </div>
 
-        {sessions.length === 0 ? (
-          <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-500">
-            No activity sessions scheduled yet. Click "Schedule Session" to begin.
+        {loading ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-500 text-sm">
+            Loading activity templates...
+          </div>
+        ) : activities.length === 0 ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 text-center space-y-3">
+            <p className="text-slate-500 text-sm">No activity templates defined yet.</p>
+            <button
+              onClick={() => setShowCreateActModal(true)}
+              className="px-3.5 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold hover:bg-indigo-100 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Create First Template
+            </button>
           </div>
         ) : (
-          sessions.map((sess) => (
-            <div
-              key={sess.id}
-              className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-slate-300 transition-colors"
-            >
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
-                      sess.status === 'active'
-                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 animate-pulse'
-                        : sess.status === 'closed'
-                        ? 'bg-slate-100 text-slate-600 border border-slate-200'
-                        : 'bg-amber-100 text-amber-800 border border-amber-200'
-                    }`}
-                  >
-                    {sess.status}
-                  </span>
-                  <h3 className="font-bold text-slate-900 text-base">{sess.session_title}</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {activities.map((act) => (
+              <div
+                key={act.id}
+                className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs hover:border-slate-300 transition-all flex flex-col justify-between"
+              >
+                <div className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border ${getCategoryBadgeClass(act.category)}`}>
+                      <Tag className="w-2.5 h-2.5 mr-1" />
+                      {act.category}
+                    </span>
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      {new Date(act.created_at).toLocaleDateString('en-GB')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-base leading-snug">
+                      {act.title}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1 line-clamp-2">
+                      {act.description || 'No description provided.'}
+                    </p>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 text-[11px] text-slate-500 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <User className="w-3 h-3 text-slate-400" />
+                      <span>Created by: <strong className="text-slate-700">{act.creator_profile?.full_name || 'Stake Leader'}</strong></span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="w-3 h-3 text-slate-400" />
+                      <span>Eligibility: <span className="font-semibold text-slate-700">{act.eligibility_rule.replace(/_/g, ' ')}</span></span>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    {sess.session_date}
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-slate-400" />
-                    {sess.start_time.substring(0, 5)} {sess.scheduled_end_time ? `– ${sess.scheduled_end_time.substring(0, 5)}` : ''} (WAT)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5 text-slate-400" />
-                    Max Terminals: <strong className="text-slate-700">{sess.max_terminals}</strong>
-                  </span>
-                  {sess.visitor_registration_enabled && (
-                    <span className="text-emerald-700 font-medium">Visitors Allowed</span>
+                <div className="pt-4 mt-3 border-t border-slate-100 flex items-center justify-end">
+                  <button
+                    onClick={() => handleOpenScheduleForTemplate(act)}
+                    className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    Schedule Session
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* SECTION B: ATTENDANCE SESSIONS */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-emerald-700" />
+              Attendance Sessions
+              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 ml-1">
+                {sessions.length}
+              </span>
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Scheduled and completed attendance instances with lifecycle actions and time-in recording.
+            </p>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 text-center text-slate-500 text-sm">
+            Loading attendance sessions...
+          </div>
+        ) : sessions.length === 0 ? (
+          <div className="bg-white p-8 rounded-xl border border-slate-200 text-center space-y-3">
+            <p className="text-slate-500 text-sm">No activity sessions scheduled yet.</p>
+            <button
+              onClick={() => setShowCreateSessModal(true)}
+              className="px-3.5 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold hover:bg-emerald-100 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <Play className="w-3.5 h-3.5" />
+              Schedule First Session
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4">
+            {sessions.map((sess) => (
+              <div
+                key={sess.id}
+                className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-slate-300 transition-colors"
+              >
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
+                        sess.status === 'active'
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 animate-pulse'
+                          : sess.status === 'closed'
+                          ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                          : 'bg-amber-100 text-amber-800 border border-amber-200'
+                      }`}
+                    >
+                      {sess.status}
+                    </span>
+                    <h3 className="font-bold text-slate-900 text-base">{sess.session_title}</h3>
+                    {sess.enable_time_in && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                        <Clock className="w-3 h-3 mr-1" />
+                        Time In Enabled
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                      {sess.session_date}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3.5 h-3.5 text-slate-400" />
+                      {sess.start_time.substring(0, 5)} {sess.scheduled_end_time ? `– ${sess.scheduled_end_time.substring(0, 5)}` : ''} (WAT)
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-slate-400" />
+                      Max Terminals: <strong className="text-slate-700">{sess.max_terminals}</strong>
+                    </span>
+                    {sess.visitor_registration_enabled && (
+                      <span className="text-emerald-700 font-medium">Visitors Allowed</span>
+                    )}
+                    {sess.activity && (
+                      <span className="text-slate-500">
+                        Template: <strong className="text-slate-700">{sess.activity.title}</strong>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2 self-start md:self-center">
+                  {sess.status === 'draft' && (
+                    <button
+                      onClick={() => {
+                        setShowInitiateModal(sess)
+                        setCustomCode(Math.floor(100000 + Math.random() * 900000).toString())
+                      }}
+                      className="px-3.5 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                      Initiate Attendance
+                    </button>
+                  )}
+
+                  {sess.status === 'active' && (
+                    <>
+                      <button
+                        onClick={() => setMonitoringSession(sess)}
+                        className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        Live Monitor
+                      </button>
+                      <button
+                        onClick={() => handleCloseSession(sess)}
+                        className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold hover:bg-rose-100 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Lock className="w-3.5 h-3.5" />
+                        Close Session
+                      </button>
+                    </>
+                  )}
+
+                  {sess.status === 'closed' && (
+                    <>
+                      <button
+                        onClick={() => setMonitoringSession(sess)}
+                        className="px-3 py-1.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        View Report
+                      </button>
+                      <button
+                        onClick={() => setReopenPromptSession(sess)}
+                        className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Request Reopening
+                      </button>
+                    </>
                   )}
                 </div>
               </div>
-
-              {/* Action Buttons */}
-              <div className="flex items-center gap-2 self-start md:self-center">
-                {sess.status === 'draft' && (
-                  <button
-                    onClick={() => {
-                      setShowInitiateModal(sess)
-                      setCustomCode(Math.floor(100000 + Math.random() * 900000).toString())
-                    }}
-                    className="px-3.5 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
-                  >
-                    <Key className="w-3.5 h-3.5" />
-                    Initiate Attendance
-                  </button>
-                )}
-
-                {sess.status === 'active' && (
-                  <>
-                    <button
-                      onClick={() => setMonitoringSession(sess)}
-                      className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      Live Monitor
-                    </button>
-                    <button
-                      onClick={() => handleCloseSession(sess)}
-                      className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold hover:bg-rose-100 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Lock className="w-3.5 h-3.5" />
-                      Close Session
-                    </button>
-                  </>
-                )}
-
-                {sess.status === 'closed' && (
-                  <>
-                    <button
-                      onClick={() => setMonitoringSession(sess)}
-                      className="px-3 py-1.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Eye className="w-3.5 h-3.5" />
-                      View Final Report
-                    </button>
-                    <button
-                      onClick={() => setReopenPromptSession(sess)}
-                      className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Request Reopening
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
-          ))
+            ))}
+          </div>
         )}
-      </div>
+      </section>
 
-      {/* Initiate Session Modal */}
+      {/* Modal: Initiate Session */}
       {showInitiateModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
@@ -418,7 +585,7 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       )}
 
-      {/* Schedule Session Modal */}
+      {/* Modal: Schedule Session */}
       {showCreateSessModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
@@ -430,7 +597,7 @@ export const ActivityManagementView: React.FC = () => {
             <form onSubmit={handleCreateSession} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Activity Definition *
+                  Activity Template *
                 </label>
                 <select
                   required
@@ -494,17 +661,37 @@ export const ActivityManagementView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="visToggle"
-                  checked={visitorEnabled}
-                  onChange={(e) => setVisitorEnabled(e.target.checked)}
-                  className="h-4 w-4 text-emerald-600 rounded border-slate-300"
-                />
-                <label htmlFor="visToggle" className="text-xs text-slate-700 font-medium cursor-pointer">
-                  Enable Visitor Registration (Non-members & Guests)
-                </label>
+              <div className="space-y-2.5 pt-1">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="visToggle"
+                    checked={visitorEnabled}
+                    onChange={(e) => setVisitorEnabled(e.target.checked)}
+                    className="h-4 w-4 text-emerald-600 rounded border-slate-300"
+                  />
+                  <label htmlFor="visToggle" className="text-xs text-slate-700 font-medium cursor-pointer">
+                    Enable Visitor Registration (Non-members & Guests)
+                  </label>
+                </div>
+
+                <div className="flex items-start gap-2 bg-blue-50/50 p-2.5 rounded-lg border border-blue-100">
+                  <input
+                    type="checkbox"
+                    id="timeInToggle"
+                    checked={enableTimeIn}
+                    onChange={(e) => setEnableTimeIn(e.target.checked)}
+                    className="h-4 w-4 text-blue-600 rounded border-slate-300 mt-0.5"
+                  />
+                  <div>
+                    <label htmlFor="timeInToggle" className="text-xs text-blue-900 font-semibold cursor-pointer block">
+                      Enable Time In
+                    </label>
+                    <p className="text-[11px] text-blue-700 mt-0.5">
+                      Records and highlights exact arrival timestamp (Africa/Lagos WAT) via trusted server time.
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
@@ -527,11 +714,14 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       )}
 
-      {/* New Activity Template Modal */}
+      {/* Modal: Create Activity Template */}
       {showCreateActModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
-            <h3 className="text-lg font-bold text-slate-900 mb-1">Create Activity Template</h3>
+            <h3 className="text-lg font-bold text-slate-900 mb-1 flex items-center gap-2">
+              <Layers className="w-5 h-5 text-indigo-600" />
+              Create Activity Template
+            </h3>
             <p className="text-xs text-slate-500 mb-4">
               Templates can be reused across recurring sessions without inheriting previous attendees.
             </p>
@@ -597,7 +787,7 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       )}
 
-      {/* Request Reopening Modal */}
+      {/* Modal: Request Reopening */}
       {reopenPromptSession && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-slate-200">
@@ -654,7 +844,7 @@ export const ActivityManagementView: React.FC = () => {
         </div>
       )}
 
-      {/* Live Monitoring Modal */}
+      {/* Modal: Live Monitoring */}
       {monitoringSession && (
         <SessionMonitoringModal
           session={monitoringSession}
