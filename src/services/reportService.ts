@@ -97,7 +97,8 @@ export async function fetchMonthlyAttendanceRegister(params: {
   })
 
   // 3. Authoritative Active Members Fetch
-  const members = await fetchMembers(unitId)
+  const rawMembers = await fetchMembers(unitId)
+  const members = rawMembers.filter(m => m.is_active !== false)
 
   // 4. Fetch Custom Enrolled records if any sessions use custom_enrolled
   const customEnrolledSessions = filteredSessions.filter(s => s.eligibility_rule === 'custom_enrolled')
@@ -254,7 +255,19 @@ export async function fetchUnitMonthlyReport(
   const unitType = unit?.unit_type || 'ward'
 
   const totalRegistered = currentRegister.rows.length
-  const totalEligibleSessions = currentRegister.sessions.length
+  // Total finalized sessions that actually applied to this unit
+  const totalEligibleSessions = currentRegister.sessions.filter(s => {
+    if (s.eligibility_rule === 'all_ysa') {
+      return !s.participating_units || s.participating_units.length === 0 || s.participating_units.includes(unitId)
+    }
+    if (s.eligibility_rule === 'specific_units') {
+      return !!s.participating_units && s.participating_units.includes(unitId)
+    }
+    if (s.eligibility_rule === 'custom_enrolled') {
+      return currentRegister.rows.some(m => m.activity_statuses[s.id] !== 'ineligible')
+    }
+    return false
+  }).length
   
   let totalAttended = 0
   let totalExcused = 0
@@ -410,12 +423,26 @@ export async function fetchStakeAnalytics(
     const uPct = uEligibleOpportunities > 0 ? Math.round((uAtt / uEligibleOpportunities) * 1000) / 10 : null
     const zeroCount = unitMembers.filter(m => m.attended_count === 0 && m.eligible_sessions_count > 0).length
 
+    // Count finalized sessions that applied to this unit (all_ysa with no unit restriction or unit in participating_units, or specific_units containing u.id, or custom_enrolled with members from this unit)
+    const unitFinalizedSessionsCount = finalizedSessions.filter(s => {
+      if (s.eligibility_rule === 'all_ysa') {
+        return !s.participating_units || s.participating_units.length === 0 || s.participating_units.includes(u.id)
+      }
+      if (s.eligibility_rule === 'specific_units') {
+        return !!s.participating_units && s.participating_units.includes(u.id)
+      }
+      if (s.eligibility_rule === 'custom_enrolled') {
+        return unitMembers.some(m => m.eligible_sessions_count > 0 && m.activity_statuses[s.id] !== 'ineligible')
+      }
+      return false
+    }).length
+
     return {
       unit_id: u.id,
       unit_name: u.unit_name,
       unit_type: u.unit_type,
       registered_ysa_count: unitMembers.length,
-      finalized_sessions_count: finalizedSessions.length,
+      finalized_sessions_count: unitFinalizedSessionsCount,
       attendance_count: uAtt,
       attendance_percentage: uPct,
       zero_attendance_count: zeroCount
