@@ -15,7 +15,10 @@ import {
   Layers,
   Sparkles,
   Tag,
-  User
+  User,
+  Copy,
+  Check,
+  RefreshCw
 } from 'lucide-react'
 import { 
   fetchActivities, 
@@ -24,7 +27,9 @@ import {
   createSession, 
   initiateSession, 
   closeSession,
-  requestReopening
+  requestReopening,
+  generateSessionAttendanceCode,
+  fetchSessionAttendanceTotals
 } from '../services/activityService'
 import { SessionMonitoringModal } from './SessionMonitoringModal'
 import { useAuth } from '../context/AuthContext'
@@ -59,10 +64,43 @@ export const ActivityManagementView: React.FC = () => {
   const [endTime, setEndTime] = useState('19:30')
   const [visitorEnabled, setVisitorEnabled] = useState(true)
   const [enableTimeIn, setEnableTimeIn] = useState(false)
+  const [scheduleMaxTerminals, setScheduleMaxTerminals] = useState<number>(2)
 
   // Initiate Session form
   const [maxTerminals, setMaxTerminals] = useState<number>(2)
-  const [customCode, setCustomCode] = useState(() => Math.floor(100000 + Math.random() * 900000).toString())
+  const [customCode, setCustomCode] = useState(() => generateSessionAttendanceCode())
+
+  // Active codes for authorized leaders & totals tracking
+  const [activeCodes, setActiveCodes] = useState<Record<string, string>>(() => {
+    try {
+      const saved = localStorage.getItem('ysa_ams_active_session_codes')
+      return saved ? JSON.parse(saved) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [copiedSessionId, setCopiedSessionId] = useState<string | null>(null)
+  const [sessionTotals, setSessionTotals] = useState<Record<string, { memberCount: number; visitorCount: number; totalCount: number }>>({})
+
+  const saveSessionCode = (sessionId: string, code: string) => {
+    setActiveCodes(prev => {
+      const next = { ...prev, [sessionId]: code }
+      try {
+        localStorage.setItem('ysa_ams_active_session_codes', JSON.stringify(next))
+      } catch {}
+      return next
+    })
+  }
+
+  const handleCopyLink = (code: string, sessionId: string) => {
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://ysa-ams.vercel.app'
+    const link = `${origin}/${code}`
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(link)
+    }
+    setCopiedSessionId(sessionId)
+    setTimeout(() => setCopiedSessionId(null), 2500)
+  }
 
   const loadAll = async () => {
     setLoading(true)
@@ -77,6 +115,18 @@ export const ActivityManagementView: React.FC = () => {
       if (acts.length > 0 && !selectedActId) {
         setSelectedActId(acts[0].id)
       }
+
+      // Fetch attendance totals for all sessions
+      const totalsMap: Record<string, { memberCount: number; visitorCount: number; totalCount: number }> = {}
+      await Promise.all(
+        sessList.map(async (s) => {
+          try {
+            const t = await fetchSessionAttendanceTotals(s.id)
+            totalsMap[s.id] = t
+          } catch {}
+        })
+      )
+      setSessionTotals(totalsMap)
     } catch (err: any) {
       setError(err.message || 'Error loading activities and sessions')
     } finally {
@@ -134,7 +184,7 @@ export const ActivityManagementView: React.FC = () => {
         visitor_registration_enabled: visitorEnabled,
         enable_time_in: enableTimeIn,
         eligibility_rule: 'all_ysa',
-        max_terminals: 2
+        max_terminals: scheduleMaxTerminals
       })
       setSuccess(`Attendance session "${sessTitle}" scheduled.`)
       setShowCreateSessModal(false)
@@ -151,17 +201,35 @@ export const ActivityManagementView: React.FC = () => {
     if (!showInitiateModal) return
     setError(null)
     try {
+      const codeUpper = customCode.trim().toUpperCase()
       await initiateSession(
         showInitiateModal.id,
-        customCode,
+        codeUpper,
         maxTerminals,
         240 // 4 hours expiry
       )
-      setSuccess(`Session activated! Attendance Code: ${customCode} (Max Terminals: ${maxTerminals})`)
+      saveSessionCode(showInitiateModal.id, codeUpper)
+      setSuccess(`Session activated! Attendance Code: ${codeUpper} (Max Terminals: ${maxTerminals})`)
       setShowInitiateModal(null)
       await loadAll()
     } catch (err: any) {
       setError(err.message || 'Failed to initiate attendance session')
+    }
+  }
+
+  const handleRegenerateCode = async (session: ActivitySession) => {
+    if (!confirm(`Regenerating the code for "${session.session_title}" will immediately invalidate the previous code and all active terminal connections for this session. Are you sure you want to proceed?`)) {
+      return
+    }
+    setError(null)
+    try {
+      const newCode = generateSessionAttendanceCode()
+      await initiateSession(session.id, newCode, session.max_terminals || 2, 240)
+      saveSessionCode(session.id, newCode)
+      setSuccess(`New attendance code generated: ${newCode}. Previous terminal leases have been invalidated.`)
+      await loadAll()
+    } catch (err: any) {
+      setError(err.message || 'Failed to regenerate attendance code')
     }
   }
 
@@ -385,112 +453,181 @@ export const ActivityManagementView: React.FC = () => {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4">
-            {sessions.map((sess) => (
-              <div
-                key={sess.id}
-                className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-slate-300 transition-colors"
-              >
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
-                        sess.status === 'active'
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 animate-pulse'
-                          : sess.status === 'closed'
-                          ? 'bg-slate-100 text-slate-600 border border-slate-200'
-                          : 'bg-amber-100 text-amber-800 border border-amber-200'
-                      }`}
-                    >
-                      {sess.status}
-                    </span>
-                    <h3 className="font-bold text-slate-900 text-base">{sess.session_title}</h3>
-                    {sess.enable_time_in && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-                        <Clock className="w-3 h-3 mr-1" />
-                        Time In Enabled
-                      </span>
-                    )}
+            {sessions.map((sess) => {
+              const totals = sessionTotals[sess.id] || { memberCount: 0, visitorCount: 0, totalCount: 0 }
+              const activeCode = activeCodes[sess.id]
+              const isCopied = copiedSessionId === sess.id
+
+              return (
+                <div
+                  key={sess.id}
+                  className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col gap-4 hover:border-slate-300 transition-colors"
+                >
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded text-xs font-bold uppercase tracking-wider ${
+                            sess.status === 'active'
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200 animate-pulse'
+                              : sess.status === 'closed'
+                              ? 'bg-slate-100 text-slate-600 border border-slate-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200'
+                          }`}
+                        >
+                          {sess.status}
+                        </span>
+                        <h3 className="font-bold text-slate-900 text-base">{sess.session_title}</h3>
+                        {sess.enable_time_in && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+                            <Clock className="w-3 h-3 mr-1" />
+                            Time In Enabled
+                          </span>
+                        )}
+                        {sess.visitor_registration_enabled && (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Visitors Allowed
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                          {sess.session_date}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-3.5 h-3.5 text-slate-400" />
+                          {sess.start_time.substring(0, 5)} {sess.scheduled_end_time ? `– ${sess.scheduled_end_time.substring(0, 5)}` : ''} (WAT)
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5 text-slate-400" />
+                          Max Terminal Limit (Concurrent Devices): <strong className="text-slate-700">{sess.max_terminals}</strong>
+                        </span>
+                        {sess.activity && (
+                          <span className="text-slate-500">
+                            Template: <strong className="text-slate-700">{sess.activity.title}</strong>
+                          </span>
+                        )}
+                        <span className="text-slate-500">
+                          Eligibility: <span className="font-semibold text-slate-700 capitalize">{sess.eligibility_rule.replace(/_/g, ' ')}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-2 self-start md:self-center flex-wrap">
+                      {sess.status === 'draft' && (
+                        <button
+                          onClick={() => {
+                            setShowInitiateModal(sess)
+                            setCustomCode(generateSessionAttendanceCode())
+                          }}
+                          className="px-3.5 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
+                        >
+                          <Key className="w-3.5 h-3.5" />
+                          Initiate Attendance
+                        </button>
+                      )}
+
+                      {sess.status === 'active' && (
+                        <>
+                          <button
+                            onClick={() => setMonitoringSession(sess)}
+                            className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Live Monitor
+                          </button>
+                          <button
+                            onClick={() => handleCloseSession(sess)}
+                            className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold hover:bg-rose-100 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Lock className="w-3.5 h-3.5" />
+                            Close Session
+                          </button>
+                        </>
+                      )}
+
+                      {sess.status === 'closed' && (
+                        <>
+                          <button
+                            onClick={() => setMonitoringSession(sess)}
+                            className="px-3 py-1.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            View Report
+                          </button>
+                          <button
+                            onClick={() => setReopenPromptSession(sess)}
+                            className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            Request Reopening
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                      {sess.session_date}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      {sess.start_time.substring(0, 5)} {sess.scheduled_end_time ? `– ${sess.scheduled_end_time.substring(0, 5)}` : ''} (WAT)
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5 text-slate-400" />
-                      Max Terminals: <strong className="text-slate-700">{sess.max_terminals}</strong>
-                    </span>
-                    {sess.visitor_registration_enabled && (
-                      <span className="text-emerald-700 font-medium">Visitors Allowed</span>
-                    )}
-                    {sess.activity && (
-                      <span className="text-slate-500">
-                        Template: <strong className="text-slate-700">{sess.activity.title}</strong>
+                  {/* Attendance Totals & Session Code Bar */}
+                  <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/70 p-3 rounded-lg text-xs">
+                    {/* Attendance Totals */}
+                    <div className="flex items-center gap-3 sm:gap-4 text-slate-600 flex-wrap">
+                      <span>
+                        Registered Present: <strong className="text-emerald-700">{totals.memberCount}</strong>
                       </span>
+                      <span>•</span>
+                      <span>
+                        Visitors: <strong className="text-blue-700">{totals.visitorCount}</strong>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        Total Attended: <strong className="text-slate-900">{totals.totalCount}</strong>
+                      </span>
+                    </div>
+
+                    {/* Code & Direct Link Controls for authorized sessions */}
+                    {activeCode && (sess.status === 'active' || sess.status === 'draft') && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-semibold text-slate-700">Code:</span>
+                        <code className="px-2 py-0.5 bg-emerald-100 text-emerald-900 font-mono font-bold rounded border border-emerald-300 text-xs tracking-wider">
+                          {activeCode}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => handleCopyLink(activeCode, sess.id)}
+                          className="px-2.5 py-1 bg-white border border-slate-300 hover:border-emerald-500 rounded text-[11px] font-semibold text-slate-700 flex items-center gap-1 hover:text-emerald-700 cursor-pointer shadow-2xs"
+                        >
+                          {isCopied ? (
+                            <>
+                              <Check className="w-3 h-3 text-emerald-600" />
+                              <span className="text-emerald-700 font-bold">Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3" />
+                              <span>Copy Link</span>
+                            </>
+                          )}
+                        </button>
+                        {sess.status === 'active' && (
+                          <button
+                            type="button"
+                            onClick={() => handleRegenerateCode(sess)}
+                            title="Regenerate code and invalidate existing terminals"
+                            className="px-2 py-1 text-slate-500 hover:text-rose-700 hover:bg-rose-50 rounded border border-slate-200 text-[11px] font-medium flex items-center gap-1 cursor-pointer"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            Regenerate
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center gap-2 self-start md:self-center">
-                  {sess.status === 'draft' && (
-                    <button
-                      onClick={() => {
-                        setShowInitiateModal(sess)
-                        setCustomCode(Math.floor(100000 + Math.random() * 900000).toString())
-                      }}
-                      className="px-3.5 py-1.5 bg-emerald-700 text-white rounded-lg text-xs font-semibold hover:bg-emerald-800 flex items-center gap-1.5 cursor-pointer shadow-xs"
-                    >
-                      <Key className="w-3.5 h-3.5" />
-                      Initiate Attendance
-                    </button>
-                  )}
-
-                  {sess.status === 'active' && (
-                    <>
-                      <button
-                        onClick={() => setMonitoringSession(sess)}
-                        className="px-3 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Live Monitor
-                      </button>
-                      <button
-                        onClick={() => handleCloseSession(sess)}
-                        className="px-3 py-1.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-semibold hover:bg-rose-100 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Lock className="w-3.5 h-3.5" />
-                        Close Session
-                      </button>
-                    </>
-                  )}
-
-                  {sess.status === 'closed' && (
-                    <>
-                      <button
-                        onClick={() => setMonitoringSession(sess)}
-                        className="px-3 py-1.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold hover:bg-slate-200 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        View Report
-                      </button>
-                      <button
-                        onClick={() => setReopenPromptSession(sess)}
-                        className="px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <RotateCcw className="w-3.5 h-3.5" />
-                        Request Reopening
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </section>
@@ -528,13 +665,14 @@ export const ActivityManagementView: React.FC = () => {
                   <input
                     type="text"
                     required
+                    maxLength={6}
                     value={customCode}
                     onChange={(e) => setCustomCode(e.target.value.toUpperCase())}
-                    className="w-full px-3 py-2 text-base font-mono font-bold tracking-widest text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg text-center"
+                    className="w-full px-3 py-2 text-base font-mono font-bold tracking-widest text-emerald-800 bg-emerald-50 border border-emerald-300 rounded-lg text-center uppercase"
                   />
                   <button
                     type="button"
-                    onClick={() => setCustomCode(Math.floor(100000 + Math.random() * 900000).toString())}
+                    onClick={() => setCustomCode(generateSessionAttendanceCode())}
                     className="px-3 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-200 cursor-pointer"
                   >
                     Randomize
@@ -549,19 +687,18 @@ export const ActivityManagementView: React.FC = () => {
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Max Terminal Limit (Concurrent Devices) *
                 </label>
-                <select
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  required
                   value={maxTerminals}
-                  onChange={(e) => setMaxTerminals(Number(e.target.value))}
+                  onChange={(e) => setMaxTerminals(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600"
-                >
-                  <option value={1}>1 Terminal (Single Check-in Desk)</option>
-                  <option value={2}>2 Terminals (Split Desks)</option>
-                  <option value={3}>3 Terminals (Three Devices)</option>
-                  <option value={5}>5 Terminals (Large Event)</option>
-                  <option value={10}>10 Terminals (Max)</option>
-                </select>
+                />
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Strictly enforced in backend logic to prevent unauthorized token expansion.
+                  Maximum number of concurrent active terminal registrations (desks/devices), not the maximum number of attendees. Whole numbers only (1–10).
                 </p>
               </div>
 
@@ -692,6 +829,25 @@ export const ActivityManagementView: React.FC = () => {
                     </p>
                   </div>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Max Terminal Limit (Concurrent Devices) *
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  step={1}
+                  required
+                  value={scheduleMaxTerminals}
+                  onChange={(e) => setScheduleMaxTerminals(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Maximum number of concurrent active terminal registrations (desks/devices), not the maximum number of attendees. Whole numbers only (1–10).
+                </p>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">

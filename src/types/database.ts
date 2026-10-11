@@ -173,6 +173,7 @@ export interface TerminalAuthorization {
   is_revoked: boolean
   revoked_at: string | null
   revoked_by: string | null
+  lease_expires_at?: string
   last_seen_at: string
   created_at: string
 }
@@ -306,6 +307,8 @@ export interface SessionVisitor {
   home_location_or_stake: string | null
   is_church_member: boolean
   recorded_by_terminal_id: string | null
+  inviting_unit_id?: string | null
+  inviting_unit?: StakeUnit
   created_at: string
 }
 

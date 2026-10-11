@@ -23,7 +23,6 @@ import {
   X,
   AlertOctagon,
   Calendar,
-  Smartphone,
   UserCheck,
   RotateCcw,
   BarChart3,
@@ -210,19 +209,6 @@ export const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
                 </a>
               )}
 
-              <a
-                href="/la/terminal"
-                onClick={(e) => { e.preventDefault(); navigateTo('/la/terminal') }}
-                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                  activeRoute === 'terminal'
-                    ? 'bg-emerald-50 text-emerald-800 font-semibold'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                }`}
-              >
-                <Smartphone className="w-4 h-4 text-emerald-600" />
-                Terminal
-              </a>
-
               {canViewMembers && (
                 <a
                   href="/la/ysa-register"
@@ -405,13 +391,6 @@ export const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
                 Activities
               </button>
             )}
-            <button
-              onClick={() => navigateTo('/la/terminal')}
-              className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
-            >
-              <Smartphone className="w-4 h-4 text-emerald-600" />
-              Attendance Terminal
-            </button>
             {canViewMembers && (
               <button
                 onClick={() => navigateTo('/la/ysa-register')}

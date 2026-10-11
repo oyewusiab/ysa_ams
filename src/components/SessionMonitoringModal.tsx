@@ -275,6 +275,7 @@ export const SessionMonitoringModal: React.FC<Props> = ({ session, onClose }) =>
                       <tr>
                         <th className="px-4 py-2 font-semibold">Visitor Name</th>
                         <th className="px-4 py-2 font-semibold">Location / Stake</th>
+                        <th className="px-4 py-2 font-semibold">Inviting Unit</th>
                         <th className="px-4 py-2 font-semibold">Contact</th>
                         <th className="px-4 py-2 font-semibold">Member</th>
                         <th className="px-4 py-2 font-semibold">Time In</th>
@@ -285,6 +286,7 @@ export const SessionMonitoringModal: React.FC<Props> = ({ session, onClose }) =>
                         <tr key={v.id}>
                           <td className="px-4 py-2 font-medium text-slate-900">{v.full_name}</td>
                           <td className="px-4 py-2 text-slate-600">{v.home_location_or_stake || '—'}</td>
+                          <td className="px-4 py-2 text-emerald-800 font-medium">{v.inviting_unit?.unit_name || '—'}</td>
                           <td className="px-4 py-2 text-slate-500">{v.contact_phone || '—'}</td>
                           <td className="px-4 py-2">
                             {v.is_church_member ? 'Church Member' : 'Guest'}

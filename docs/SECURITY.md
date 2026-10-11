@@ -52,3 +52,12 @@ IF v_admin_count <= 1 THEN
     RAISE EXCEPTION 'Operation rejected: Cannot remove or revoke the last remaining system administrator.';
 END IF;
 ```
+
+---
+
+## 4. Outstanding Reporting Security-Hardening Notice
+
+> [!IMPORTANT]
+> **Status: Documented / Active Tracking (Unresolved by Terminal Access Work)**
+> The current reporting security-hardening review tracks granular RLS scoping for cross-unit reporting aggregate queries and analytical exports. While session-code terminal access, concurrent terminal lease limits, and attendance persistence have been implemented in accordance with Phase 2/3 specifications, the reporting security-hardening audit item remains actively documented and must not be considered resolved by these terminal access corrections. Full cryptographic signed assertion for analytics reporting export tables is slated for subsequent reporting isolation milestones.
+

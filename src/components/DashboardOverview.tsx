@@ -336,14 +336,14 @@ export const DashboardOverview: React.FC<DashboardOverviewProps> = ({
           )}
 
           <button
-            onClick={() => handleNav('/la/terminal')}
+            onClick={() => handleNav('/')}
             className="p-3 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-200 rounded-xl text-left transition-all group cursor-pointer"
           >
             <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mb-2 group-hover:scale-105 transition-transform">
               <Smartphone className="w-4 h-4" />
             </div>
-            <span className="text-xs font-bold text-slate-800 block">Open Terminal</span>
-            <span className="text-[11px] text-slate-500">Check-in interface</span>
+            <span className="text-xs font-bold text-slate-800 block">Attendance Terminal</span>
+            <span className="text-[11px] text-slate-500">Public check-in portal</span>
           </button>
 
           <button

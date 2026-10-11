@@ -7,21 +7,31 @@ export interface TerminalSessionInfo {
   terminal_id: string
   terminal_token: string
   visitor_enabled: boolean
+  enable_time_in?: boolean
   reconnected: boolean
 }
 
 const TERMINAL_AUTH_KEY = 'ysa_ams_terminal_credentials'
 
+/**
+ * Authorize or re-authenticate an attendance terminal using the 6-character session attendance code.
+ * Tied to the validated session and subject to atomic concurrent terminal limit.
+ */
 export async function authorizeTerminalWithCode(
   sessionCode: string,
-  terminalLabel: string
+  terminalLabel: string = 'Attendance Terminal'
 ): Promise<TerminalSessionInfo> {
+  const cleanCode = sessionCode.trim().toUpperCase()
+  if (!cleanCode || cleanCode.length < 4) {
+    throw new Error('Please enter a valid session attendance code.')
+  }
+
   // Check if we have an existing cached token for reconnect
   const cached = getStoredTerminalAuth()
   const existingToken = cached?.terminal_token || null
 
   const { data, error } = await supabase.rpc('authorize_terminal', {
-    p_session_code: sessionCode.trim().toUpperCase(),
+    p_session_code: cleanCode,
     p_terminal_label: terminalLabel.trim() || 'Attendance Terminal',
     p_existing_terminal_token: existingToken
   })
@@ -31,11 +41,46 @@ export async function authorizeTerminalWithCode(
   }
 
   const result: TerminalSessionInfo = data
-  // Persist locally for seamless reconnects
   saveTerminalAuth(result)
   return result
 }
 
+/**
+ * Send heartbeat to maintain server-side terminal lease.
+ * Prevents active tabs from expiring while releasing abandoned tabs.
+ */
+export async function sendTerminalHeartbeat(terminalToken: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase.rpc('heartbeat_terminal_lease', {
+      p_terminal_token: terminalToken
+    })
+    if (error || !data?.success) {
+      return false
+    }
+    return true
+  } catch (err) {
+    return false
+  }
+}
+
+/**
+ * Explicitly release the terminal authorization on logout or tab exit.
+ */
+export async function releaseTerminal(terminalToken: string): Promise<void> {
+  try {
+    await supabase.rpc('release_terminal', {
+      p_terminal_token: terminalToken
+    })
+  } catch (e) {
+    // Ignore network drop on unload
+  } finally {
+    clearTerminalAuth()
+  }
+}
+
+/**
+ * Record attendance for a registered YSA member using authorized terminal token.
+ */
 export async function recordAttendanceFromTerminal(
   sessionId: string,
   memberId: string,
@@ -54,21 +99,27 @@ export async function recordAttendanceFromTerminal(
   return data
 }
 
+/**
+ * Record attendance for a visitor or non-member guest using authorized terminal token,
+ * with optional inviting unit association.
+ */
 export async function recordVisitorFromTerminal(
   sessionId: string,
   fullName: string,
   phone: string | null,
   homeLocation: string | null,
   isChurchMember: boolean,
-  terminalToken: string
-): Promise<{ success: boolean; visitor_id: string; full_name: string }> {
+  terminalToken: string,
+  invitingUnitId?: string | null
+): Promise<{ success: boolean; visitor_id: string; full_name: string; check_in_time: string }> {
   const { data, error } = await supabase.rpc('record_visitor_attendance', {
     p_session_id: sessionId,
     p_full_name: fullName.trim(),
     p_contact_phone: phone?.trim() || null,
     p_home_location: homeLocation?.trim() || null,
     p_is_church_member: isChurchMember,
-    p_terminal_token: terminalToken
+    p_terminal_token: terminalToken,
+    p_inviting_unit_id: invitingUnitId || null
   })
 
   if (error) {

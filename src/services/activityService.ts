@@ -110,6 +110,24 @@ export async function createSession(sessionData: Partial<ActivitySession>): Prom
 
 // 3. SESSION LIFE CYCLE RPCs
 
+// Generate unambiguous 6-character random alphanumeric attendance code (e.g. 5BV21F)
+export function generateSessionAttendanceCode(): string {
+  const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'
+  let code = ''
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const bytes = new Uint8Array(6)
+    crypto.getRandomValues(bytes)
+    for (let i = 0; i < 6; i++) {
+      code += alphabet[bytes[i] % alphabet.length]
+    }
+  } else {
+    for (let i = 0; i < 6; i++) {
+      code += alphabet[Math.floor(Math.random() * alphabet.length)]
+    }
+  }
+  return code
+}
+
 // Initiate attendance session with cryptographic code & terminal limit
 export async function initiateSession(
   sessionId: string,
@@ -117,9 +135,10 @@ export async function initiateSession(
   maxTerminals: number,
   expiryMinutes: number = 240
 ): Promise<{ success: boolean; session_id: string; status: string; expires_at: string }> {
+  const cleanCode = code.trim().toUpperCase()
   const { data, error } = await supabase.rpc('initiate_attendance_session', {
     p_session_id: sessionId,
-    p_code: code,
+    p_code: cleanCode,
     p_max_terminals: maxTerminals,
     p_expiry_minutes: expiryMinutes
   })
@@ -152,7 +171,7 @@ export async function fetchSessionAttendance(sessionId: string): Promise<{
         .order('check_in_time', { ascending: false }),
       supabase
         .from('session_visitors')
-        .select('*')
+        .select('*, inviting_unit:stake_units!inviting_unit_id(*)')
         .eq('session_id', sessionId)
         .order('created_at', { ascending: false })
     ])
@@ -167,6 +186,38 @@ export async function fetchSessionAttendance(sessionId: string): Promise<{
   } catch (err) {
     console.warn('fetchSessionAttendance fallback:', err)
     return { records: [], visitors: [] }
+  }
+}
+
+/**
+ * Fetch lightweight attendance count totals for session card summary.
+ */
+export async function fetchSessionAttendanceTotals(sessionId: string): Promise<{
+  memberCount: number
+  visitorCount: number
+  totalCount: number
+}> {
+  try {
+    const [attRes, visRes] = await Promise.all([
+      supabase
+        .from('attendance_records')
+        .select('*', { count: 'exact', head: true })
+        .eq('session_id', sessionId),
+      supabase
+        .from('session_visitors')
+        .select('*', { count: 'exact', head: true })
+        .eq('session_id', sessionId)
+    ])
+
+    const memberCount = attRes.count || 0
+    const visitorCount = visRes.count || 0
+    return {
+      memberCount,
+      visitorCount,
+      totalCount: memberCount + visitorCount
+    }
+  } catch (err) {
+    return { memberCount: 0, visitorCount: 0, totalCount: 0 }
   }
 }
 
