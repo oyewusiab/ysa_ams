@@ -82,6 +82,10 @@ export const ActivityManagementView: React.FC = () => {
   const handleCreateActivity = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    if (!user?.id) {
+      setError('Authentication required: Unable to identify the active user profile.')
+      return
+    }
     try {
       await createActivity({
         title: actTitle.trim(),
@@ -89,7 +93,7 @@ export const ActivityManagementView: React.FC = () => {
         category: actCategory,
         eligibility_rule: 'all_ysa',
         visitor_registration_default: true,
-        created_by: user?.id || 'current-user'
+        created_by: user.id
       })
       setSuccess(`Activity "${actTitle}" created.`)
       setShowCreateActModal(false)

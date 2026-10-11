@@ -27,21 +27,43 @@ export async function fetchActivities(): Promise<Activity[]> {
 export async function createActivity(activity: Partial<Activity>): Promise<Activity> {
   let createdBy = activity.created_by
 
+  // If created_by is missing or is the placeholder string 'current-user', resolve authenticated user
   if (!createdBy || createdBy === 'current-user') {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      createdBy = user.id
+    const { data: authData, error: authError } = await supabase.auth.getUser()
+    if (authError || !authData?.user) {
+      throw new Error('Authentication required: Unable to resolve authenticated user session.')
     }
+
+    // Verify user profile exists and is active in public.user_profiles
+    const { data: profile, error: profileErr } = await supabase
+      .from('user_profiles')
+      .select('id, account_status')
+      .eq('id', authData.user.id)
+      .single()
+
+    if (profileErr || !profile) {
+      throw new Error('Authorization error: Authenticated staff user profile not found.')
+    }
+
+    if (profile.account_status !== 'active') {
+      throw new Error('Authorization error: Account is deactivated.')
+    }
+
+    createdBy = authData.user.id
   }
 
-  const payload = {
-    ...activity,
-    ...(createdBy && createdBy !== 'current-user' ? { created_by: createdBy } : {})
+  // Validate that createdBy is a valid UUID (RFC 4122 v1-v5 or general 36-char hex UUID)
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  if (!uuidRegex.test(createdBy)) {
+    throw new Error(`Invalid identity syntax: "${createdBy}" is not a valid user UUID.`)
   }
 
   const { data, error } = await supabase
     .from('activities')
-    .insert([payload])
+    .insert([{
+      ...activity,
+      created_by: createdBy
+    }])
     .select('*, creator_profile:user_profiles(full_name)')
     .single()
 

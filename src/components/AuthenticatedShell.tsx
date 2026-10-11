@@ -11,6 +11,7 @@ import { ReopeningApprovalsView } from './ReopeningApprovalsView'
 import { AttendanceReportsView } from './AttendanceReportsView'
 import { UnitReportsView } from './UnitReportsView'
 import { StakeAnalyticsDashboard } from './StakeAnalyticsDashboard'
+import { SettingsView } from './SettingsView'
 import { 
   Shield, 
   Users, 
@@ -26,27 +27,70 @@ import {
   UserCheck,
   RotateCcw,
   BarChart3,
-  ClipboardList
+  ClipboardList,
+  Settings,
+  AlertCircle
 } from 'lucide-react'
 import { formatUserRoles } from '../types/database'
 
-type NavigationTab = 
+export type LeadershipRoute = 
   | 'dashboard' 
   | 'activities' 
   | 'terminal' 
-  | 'members' 
+  | 'ysa-register' 
   | 'reports'
   | 'unit-reports'
   | 'analytics'
   | 'reopening' 
   | 'users' 
   | 'units' 
-  | 'audit'
+  | 'audit-logs'
+  | 'settings'
 
-export const AuthenticatedShell: React.FC = () => {
+interface AuthenticatedShellProps {
+  currentSubpath?: string
+  onNavigate?: (path: string) => void
+}
+
+export const AuthenticatedShell: React.FC<AuthenticatedShellProps> = ({
+  currentSubpath = 'dashboard',
+  onNavigate
+}) => {
   const { profile, roles, isAdmin, isStakePresidency, isYsaLeader, isBishop, isBranchPresident, isDeactivated, signOut } = useAuth()
-  const [activeTab, setActiveTab] = useState<NavigationTab>('dashboard')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  // Map incoming URL subpath to route
+  const normalizeRoute = (subpath: string): { route: LeadershipRoute; isKnown: boolean } => {
+    const clean = subpath.replace(/^\/+|\/+$/g, '').toLowerCase() || 'dashboard'
+    
+    // Legacy support / alias mappings
+    if (clean === 'dashboard') return { route: 'dashboard', isKnown: true }
+    if (clean === 'activities') return { route: 'activities', isKnown: true }
+    if (clean === 'terminal') return { route: 'terminal', isKnown: true }
+    if (clean === 'ysa-register' || clean === 'members') return { route: 'ysa-register', isKnown: true }
+    if (clean === 'reports') return { route: 'reports', isKnown: true }
+    if (clean === 'unit-reports') return { route: 'unit-reports', isKnown: true }
+    if (clean === 'analytics') return { route: 'analytics', isKnown: true }
+    if (clean === 'reopening') return { route: 'reopening', isKnown: true }
+    if (clean === 'users') return { route: 'users', isKnown: true }
+    if (clean === 'units') return { route: 'units', isKnown: true }
+    if (clean === 'audit-logs' || clean === 'audit') return { route: 'audit-logs', isKnown: true }
+    if (clean === 'settings') return { route: 'settings', isKnown: true }
+
+    return { route: 'dashboard', isKnown: false }
+  }
+
+  const { route: activeRoute, isKnown: isKnownRoute } = normalizeRoute(currentSubpath)
+
+  const navigateTo = (path: string) => {
+    setMobileMenuOpen(false)
+    if (onNavigate) {
+      onNavigate(path)
+    } else {
+      window.history.pushState({}, '', path)
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    }
+  }
 
   if (isDeactivated) {
     return (
@@ -74,6 +118,44 @@ export const AuthenticatedShell: React.FC = () => {
   const canManageActivities = isAdmin || isStakePresidency || isYsaLeader
   const canViewMembers = isAdmin || isStakePresidency || isYsaLeader || isBishop || isBranchPresident
   const canApproveReopen = isAdmin || isStakePresidency
+  const canViewAudit = isAdmin || isStakePresidency
+  const canViewAnalytics = isAdmin || isStakePresidency
+  const canManageUsers = isAdmin
+  const canManageUnits = isAdmin
+
+  // Verify access for active route
+  const checkAccess = (): { allowed: boolean; message?: string } => {
+    if (!isKnownRoute) {
+      return { allowed: false, message: `The requested path "/la/${currentSubpath}" was not found.` }
+    }
+    if (activeRoute === 'activities' && !canManageActivities) {
+      return { allowed: false, message: 'You do not have permission to manage activity definitions.' }
+    }
+    if (activeRoute === 'ysa-register' && !canViewMembers) {
+      return { allowed: false, message: 'You do not have permission to view the YSA member register.' }
+    }
+    if (activeRoute === 'unit-reports' && !canViewMembers) {
+      return { allowed: false, message: 'You do not have permission to view unit reports.' }
+    }
+    if (activeRoute === 'analytics' && !canViewAnalytics) {
+      return { allowed: false, message: 'Stake analytics is restricted to Stake Presidency and Administrators.' }
+    }
+    if (activeRoute === 'reopening' && !canApproveReopen) {
+      return { allowed: false, message: 'Session reopening approval is restricted to Stake Presidency and Administrators.' }
+    }
+    if (activeRoute === 'users' && !canManageUsers) {
+      return { allowed: false, message: 'User and role provisioning is restricted to System Administrators.' }
+    }
+    if (activeRoute === 'units' && !canManageUnits) {
+      return { allowed: false, message: 'Stake unit management is restricted to System Administrators.' }
+    }
+    if (activeRoute === 'audit-logs' && !canViewAudit) {
+      return { allowed: false, message: 'Audit trail inspection is restricted to Stake Presidency and Administrators.' }
+    }
+    return { allowed: true }
+  }
+
+  const access = checkAccess()
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -81,7 +163,10 @@ export const AuthenticatedShell: React.FC = () => {
       <header className="bg-white border-b border-slate-200 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16">
-            <div className="flex items-center gap-3">
+            <div 
+              onClick={() => navigateTo('/la/dashboard')}
+              className="flex items-center gap-3 cursor-pointer"
+            >
               <div className="w-9 h-9 bg-emerald-700 rounded-lg flex items-center justify-center text-white shadow-xs">
                 <Shield className="w-5 h-5" />
               </div>
@@ -97,157 +182,177 @@ export const AuthenticatedShell: React.FC = () => {
 
             {/* Desktop Navigation Links */}
             <nav className="hidden lg:flex items-center space-x-1">
-              <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'dashboard'
+              <a
+                href="/la/dashboard"
+                onClick={(e) => { e.preventDefault(); navigateTo('/la/dashboard') }}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  activeRoute === 'dashboard'
                     ? 'bg-emerald-50 text-emerald-800 font-semibold'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                 }`}
               >
                 <LayoutDashboard className="w-4 h-4" />
                 Dashboard
-              </button>
+              </a>
 
               {canManageActivities && (
-                <button
-                  onClick={() => setActiveTab('activities')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'activities'
+                <a
+                  href="/la/activities"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/activities') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'activities'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <Calendar className="w-4 h-4" />
                   Activities
-                </button>
+                </a>
               )}
 
-              {/* Attendance Terminal available to volunteer operators & leaders */}
-              <button
-                onClick={() => setActiveTab('terminal')}
-                className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'terminal'
+              <a
+                href="/la/terminal"
+                onClick={(e) => { e.preventDefault(); navigateTo('/la/terminal') }}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  activeRoute === 'terminal'
                     ? 'bg-emerald-50 text-emerald-800 font-semibold'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                 }`}
               >
                 <Smartphone className="w-4 h-4 text-emerald-600" />
                 Terminal
-              </button>
+              </a>
 
               {canViewMembers && (
-                <button
-                  onClick={() => setActiveTab('members')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'members'
+                <a
+                  href="/la/ysa-register"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/ysa-register') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'ysa-register'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <UserCheck className="w-4 h-4" />
                   YSA Register
-                </button>
+                </a>
               )}
 
-              {/* Phase 3.1: Monthly Attendance Registers & Individual YSA History */}
-              <button
-                onClick={() => setActiveTab('reports')}
-                className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'reports'
+              <a
+                href="/la/reports"
+                onClick={(e) => { e.preventDefault(); navigateTo('/la/reports') }}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  activeRoute === 'reports'
                     ? 'bg-emerald-50 text-emerald-800 font-semibold'
                     : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                 }`}
               >
                 <ClipboardList className="w-4 h-4 text-emerald-700" />
                 Reports
-              </button>
+              </a>
 
-              {/* Phase 3.2: Ward & Branch Reports */}
               {canViewMembers && (
-                <button
-                  onClick={() => setActiveTab('unit-reports')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'unit-reports'
+                <a
+                  href="/la/unit-reports"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/unit-reports') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'unit-reports'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <Building2 className="w-4 h-4 text-emerald-700" />
                   Unit Reports
-                </button>
+                </a>
               )}
 
-              {/* Phase 3.3: Stake Presidency Analytics */}
-              {(isAdmin || isStakePresidency) && (
-                <button
-                  onClick={() => setActiveTab('analytics')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'analytics'
+              {canViewAnalytics && (
+                <a
+                  href="/la/analytics"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/analytics') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'analytics'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <BarChart3 className="w-4 h-4 text-emerald-700" />
                   Stake Analytics
-                </button>
+                </a>
               )}
 
               {canApproveReopen && (
-                <button
-                  onClick={() => setActiveTab('reopening')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'reopening'
+                <a
+                  href="/la/reopening"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/reopening') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'reopening'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <RotateCcw className="w-4 h-4 text-amber-600" />
                   Reopening
-                </button>
+                </a>
               )}
 
-              {isAdmin && (
-                <button
-                  onClick={() => setActiveTab('users')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'users'
+              {canManageUsers && (
+                <a
+                  href="/la/users"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/users') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'users'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <Users className="w-4 h-4" />
                   Users
-                </button>
+                </a>
               )}
 
-              {isAdmin && (
-                <button
-                  onClick={() => setActiveTab('units')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'units'
+              {canManageUnits && (
+                <a
+                  href="/la/units"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/units') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'units'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <Building2 className="w-4 h-4" />
                   Units
-                </button>
+                </a>
               )}
 
-              {(isAdmin || isStakePresidency) && (
-                <button
-                  onClick={() => setActiveTab('audit')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium cursor-pointer transition-colors flex items-center gap-1.5 ${
-                    activeTab === 'audit'
+              {canViewAudit && (
+                <a
+                  href="/la/audit-logs"
+                  onClick={(e) => { e.preventDefault(); navigateTo('/la/audit-logs') }}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                    activeRoute === 'audit-logs'
                       ? 'bg-emerald-50 text-emerald-800 font-semibold'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
                   }`}
                 >
                   <FileText className="w-4 h-4" />
                   Audit
-                </button>
+                </a>
               )}
+
+              <a
+                href="/la/settings"
+                onClick={(e) => { e.preventDefault(); navigateTo('/la/settings') }}
+                className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                  activeRoute === 'settings'
+                    ? 'bg-emerald-50 text-emerald-800 font-semibold'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <Settings className="w-4 h-4" />
+                Settings
+              </a>
             </nav>
 
             {/* User Profile Info & Sign Out */}
@@ -285,7 +390,7 @@ export const AuthenticatedShell: React.FC = () => {
         {mobileMenuOpen && (
           <div className="lg:hidden border-t border-slate-200 bg-white px-4 pt-2 pb-4 space-y-1">
             <button
-              onClick={() => { setActiveTab('dashboard'); setMobileMenuOpen(false) }}
+              onClick={() => navigateTo('/la/dashboard')}
               className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
             >
               <LayoutDashboard className="w-4 h-4" />
@@ -293,7 +398,7 @@ export const AuthenticatedShell: React.FC = () => {
             </button>
             {canManageActivities && (
               <button
-                onClick={() => { setActiveTab('activities'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/activities')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <Calendar className="w-4 h-4" />
@@ -301,7 +406,7 @@ export const AuthenticatedShell: React.FC = () => {
               </button>
             )}
             <button
-              onClick={() => { setActiveTab('terminal'); setMobileMenuOpen(false) }}
+              onClick={() => navigateTo('/la/terminal')}
               className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
             >
               <Smartphone className="w-4 h-4 text-emerald-600" />
@@ -309,7 +414,7 @@ export const AuthenticatedShell: React.FC = () => {
             </button>
             {canViewMembers && (
               <button
-                onClick={() => { setActiveTab('members'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/ysa-register')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <UserCheck className="w-4 h-4" />
@@ -317,7 +422,7 @@ export const AuthenticatedShell: React.FC = () => {
               </button>
             )}
             <button
-              onClick={() => { setActiveTab('reports'); setMobileMenuOpen(false) }}
+              onClick={() => navigateTo('/la/reports')}
               className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
             >
               <ClipboardList className="w-4 h-4 text-emerald-700" />
@@ -325,16 +430,16 @@ export const AuthenticatedShell: React.FC = () => {
             </button>
             {canViewMembers && (
               <button
-                onClick={() => { setActiveTab('unit-reports'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/unit-reports')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <Building2 className="w-4 h-4 text-emerald-700" />
                 Unit Reports
               </button>
             )}
-            {(isAdmin || isStakePresidency) && (
+            {canViewAnalytics && (
               <button
-                onClick={() => { setActiveTab('analytics'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/analytics')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <BarChart3 className="w-4 h-4 text-emerald-700" />
@@ -343,40 +448,47 @@ export const AuthenticatedShell: React.FC = () => {
             )}
             {canApproveReopen && (
               <button
-                onClick={() => { setActiveTab('reopening'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/reopening')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <RotateCcw className="w-4 h-4 text-amber-600" />
                 Reopening & Corrections
               </button>
             )}
-            {isAdmin && (
+            {canManageUsers && (
               <button
-                onClick={() => { setActiveTab('users'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/users')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <Users className="w-4 h-4" />
                 Users & Roles
               </button>
             )}
-            {isAdmin && (
+            {canManageUnits && (
               <button
-                onClick={() => { setActiveTab('units'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/units')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <Building2 className="w-4 h-4" />
                 Stake Units
               </button>
             )}
-            {(isAdmin || isStakePresidency) && (
+            {canViewAudit && (
               <button
-                onClick={() => { setActiveTab('audit'); setMobileMenuOpen(false) }}
+                onClick={() => navigateTo('/la/audit-logs')}
                 className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
               >
                 <FileText className="w-4 h-4" />
                 Audit Trail
               </button>
             )}
+            <button
+              onClick={() => navigateTo('/la/settings')}
+              className="w-full text-left px-3 py-2 rounded-md text-sm font-medium text-slate-700 hover:bg-slate-100 flex items-center gap-2"
+            >
+              <Settings className="w-4 h-4" />
+              Settings
+            </button>
             <div className="pt-4 border-t border-slate-200 flex items-center justify-between">
               <div>
                 <div className="text-sm font-bold text-slate-800">{profile?.full_name}</div>
@@ -395,22 +507,47 @@ export const AuthenticatedShell: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'dashboard' && <DashboardOverview />}
-        {activeTab === 'activities' && canManageActivities && <ActivityManagementView />}
-        {activeTab === 'terminal' && <AttendanceTerminalView />}
-        {activeTab === 'members' && canViewMembers && <MemberManagementView />}
-        {activeTab === 'reports' && <AttendanceReportsView />}
-        {activeTab === 'unit-reports' && canViewMembers && <UnitReportsView />}
-        {activeTab === 'analytics' && (isAdmin || isStakePresidency) && <StakeAnalyticsDashboard />}
-        {activeTab === 'reopening' && canApproveReopen && <ReopeningApprovalsView />}
-        {activeTab === 'users' && isAdmin && <UserManagement />}
-        {activeTab === 'units' && isAdmin && <StakeUnitsView />}
-        {activeTab === 'audit' && (isAdmin || isStakePresidency) && <AuditLogsView />}
+        {!access.allowed ? (
+          <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center max-w-lg mx-auto shadow-xs">
+            <div className="w-12 h-12 bg-amber-50 text-amber-700 rounded-full flex items-center justify-center mx-auto mb-3">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h2 className="text-lg font-bold text-slate-900 mb-1">
+              {!isKnownRoute ? 'Page Not Found' : 'Access Restricted'}
+            </h2>
+            <p className="text-xs text-slate-600 mb-6 leading-relaxed">
+              {access.message}
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => navigateTo('/la/dashboard')}
+                className="px-4 py-2 bg-emerald-700 text-white rounded-lg text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
+              >
+                Return to Dashboard
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {activeRoute === 'dashboard' && <DashboardOverview onNavigate={navigateTo} />}
+            {activeRoute === 'activities' && <ActivityManagementView />}
+            {activeRoute === 'terminal' && <AttendanceTerminalView />}
+            {activeRoute === 'ysa-register' && <MemberManagementView />}
+            {activeRoute === 'reports' && <AttendanceReportsView />}
+            {activeRoute === 'unit-reports' && <UnitReportsView />}
+            {activeRoute === 'analytics' && <StakeAnalyticsDashboard />}
+            {activeRoute === 'reopening' && <ReopeningApprovalsView />}
+            {activeRoute === 'users' && <UserManagement />}
+            {activeRoute === 'units' && <StakeUnitsView />}
+            {activeRoute === 'audit-logs' && <AuditLogsView />}
+            {activeRoute === 'settings' && <SettingsView />}
+          </>
+        )}
       </main>
 
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
-        Abeokuta Nigeria Obantoko Stake — Young Single Adult Attendance Management System • Phase 2 Engine
+        Abeokuta Nigeria Obantoko Stake — Young Single Adult Attendance Management System
       </footer>
     </div>
   )
