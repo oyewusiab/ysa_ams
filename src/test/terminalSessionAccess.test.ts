@@ -212,6 +212,52 @@ describe('OBJECTIVE 2 — Concurrent Terminal Limits and Lease Heartbeats', () =
     // A brand new token is issued, not reusing revoked one
     expect(reauth.token).not.toBe(t1.token)
   })
+
+  it('reconnects with an existing valid terminal token without consuming an extra slot', () => {
+    // Session limit is 2
+    const t1 = authorizeDevice(session, '5BV21F')
+    const t2 = authorizeDevice(session, '5BV21F')
+    expect(t1.success).toBe(true)
+    expect(t2.success).toBe(true)
+
+    // A third new device is blocked because 2/2 slots are consumed
+    const t3Blocked = authorizeDevice(session, '5BV21F')
+    expect(t3Blocked.success).toBe(false)
+
+    // Terminal 1 re-authorizes / reconnects using its existing valid token
+    const t1Reconnected = authorizeDevice(session, '5BV21F', t1.token)
+    expect(t1Reconnected.success).toBe(true)
+    expect(t1Reconnected.token).toBe(t1.token)
+
+    // Total terminals list count has NOT increased
+    expect(session.terminals).toHaveLength(2)
+  })
+
+  it('treats reconnect attempts with revoked or expired tokens as new registrations', () => {
+    const t1 = authorizeDevice(session, '5BV21F')
+    expect(t1.success).toBe(true)
+
+    // Explicitly release / revoke t1
+    releaseTerminal(session, t1.token!)
+
+    // Reconnecting with revoked token should not restore the revoked lease, but issue a new token
+    const reconnectAttempt = authorizeDevice(session, '5BV21F', t1.token)
+    expect(reconnectAttempt.success).toBe(true)
+    expect(reconnectAttempt.token).not.toBe(t1.token)
+  })
+
+  it('rejects authorization for invalid codes or closed sessions', () => {
+    // Invalid code
+    const invalidCodeRes = authorizeDevice(session, 'WRONG1')
+    expect(invalidCodeRes.success).toBe(false)
+    expect(invalidCodeRes.error).toContain('Invalid or expired session code')
+
+    // Closed session
+    session.status = 'closed'
+    const closedSessionRes = authorizeDevice(session, '5BV21F')
+    expect(closedSessionRes.success).toBe(false)
+    expect(closedSessionRes.error).toContain('Session is not active')
+  })
 })
 
 describe('OBJECTIVE 4 — Attendance Data Persistence and Visitor Unit Association', () => {

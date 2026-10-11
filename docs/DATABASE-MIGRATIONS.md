@@ -21,6 +21,12 @@ All schema definitions, constraints, triggers, and Row-Level Security policies a
    - `manage_user_role()` RPC function.
    - `update_user_account_status()` RPC function.
    - Seeds initial Abeokuta Nigeria Obantoko Stake units (`Obantoko 1st Ward`, `Obantoko 2nd Ward`, `Asero Ward`, `Adatan Ward`, `Alabata Branch`, `Odeda Branch`, `Osiele Branch`).
+...
+11. `20261011000011_terminal_access_and_attendance_persistence.sql`
+   - Session-code-based terminal authorization, heartbeat lease, and release RPCs.
+   - Hardened atomic attendance recording and visitor tracking.
+12. `20261011000012_fix_authorize_terminal_record_variable.sql`
+   - Resolves unassigned RECORD variable bug in `public.authorize_terminal()` using strongly-typed scalar `v_terminal_id UUID`.
 
 ---
 
