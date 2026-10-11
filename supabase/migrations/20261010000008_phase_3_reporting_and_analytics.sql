@@ -72,6 +72,11 @@ DECLARE
 BEGIN
     v_caller_id := auth.uid();
 
+    -- Validate reporting period
+    IF p_month < 1 OR p_month > 12 OR p_year < 2000 OR p_year > 2100 THEN
+        RAISE EXCEPTION 'Invalid reporting period: Month must be 1-12 and year must be valid.';
+    END IF;
+
     -- Permission check
     IF NOT public.is_account_active(v_caller_id) THEN
         RAISE EXCEPTION 'Unauthorized: Caller account is not active.';
@@ -177,6 +182,11 @@ DECLARE
 BEGIN
     v_caller_id := auth.uid();
 
+    -- Validate reporting period
+    IF p_month < 1 OR p_month > 12 OR p_year < 2000 OR p_year > 2100 THEN
+        RAISE EXCEPTION 'Invalid reporting period: Month must be 1-12 and year must be valid.';
+    END IF;
+
     -- Only Stake Presidency and Admin can call this overview
     IF NOT (public.is_system_admin(v_caller_id) OR public.has_any_role(ARRAY['stake_presidency'], v_caller_id)) THEN
         RAISE EXCEPTION 'Unauthorized: Stake Analytics is restricted to Stake Presidency and Administrators.';
@@ -193,11 +203,6 @@ BEGIN
     ),
     pending_sessions AS (
         SELECT id FROM period_sessions WHERE status IN ('active', 'draft')
-    ),
-    period_attendance AS (
-        SELECT ar.id, ar.session_id, ar.member_id, ar.recorded_unit_id, ar.attendance_status
-        FROM public.attendance_records ar
-        JOIN closed_sessions cs ON cs.id = ar.session_id
     ),
     active_units AS (
         SELECT id, unit_name, unit_type FROM public.stake_units WHERE is_active = TRUE
@@ -220,6 +225,24 @@ BEGIN
     total_eligible_count AS (
         SELECT COUNT(*) AS count FROM eligible_pairs
     ),
+    -- Strict numerator: Only eligible member-session pairs with a verified present record
+    eligible_present_pairs AS (
+        SELECT DISTINCT ep.member_id, ep.session_id
+        FROM eligible_pairs ep
+        JOIN public.attendance_records ar 
+            ON ar.session_id = ep.session_id 
+           AND ar.member_id = ep.member_id
+        WHERE ar.attendance_status = 'present'
+    ),
+    -- Strict excused instances: Only eligible member-session pairs with an excused record
+    eligible_excused_pairs AS (
+        SELECT DISTINCT ep.member_id, ep.session_id
+        FROM eligible_pairs ep
+        JOIN public.attendance_records ar 
+            ON ar.session_id = ep.session_id 
+           AND ar.member_id = ep.member_id
+        WHERE ar.attendance_status = 'excused'
+    ),
     reopening_requests_count AS (
         SELECT COUNT(*) AS count
         FROM public.session_reopening_requests r
@@ -239,16 +262,16 @@ BEGIN
         'finalized_sessions_count', (SELECT COUNT(*) FROM closed_sessions),
         'pending_sessions_count', (SELECT COUNT(*) FROM pending_sessions),
         'total_eligible_opportunities', (SELECT count FROM total_eligible_count),
-        'total_attendance_instances', (SELECT COUNT(*) FROM period_attendance WHERE attendance_status = 'present'),
-        'total_excused_instances', (SELECT COUNT(*) FROM period_attendance WHERE attendance_status = 'excused'),
+        'total_attendance_instances', (SELECT COUNT(*) FROM eligible_present_pairs),
+        'total_excused_instances', (SELECT COUNT(*) FROM eligible_excused_pairs),
         'overall_attendance_percentage', (
             SELECT CASE 
                 WHEN tec.count > 0 THEN 
-                    ROUND(((COUNT(pa.id)::NUMERIC / tec.count::NUMERIC) * 100.0), 1)
+                    ROUND(((COUNT(epp.member_id)::NUMERIC / tec.count::NUMERIC) * 100.0), 1)
                 ELSE NULL 
             END
             FROM total_eligible_count tec
-            LEFT JOIN period_attendance pa ON pa.attendance_status = 'present'
+            LEFT JOIN eligible_present_pairs epp ON TRUE
             GROUP BY tec.count
         ),
         'pending_reopening_requests', (SELECT count FROM reopening_requests_count),

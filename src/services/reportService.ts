@@ -482,20 +482,22 @@ export async function fetchStakeAnalytics(
   // Outstanding reopening and corrections
   let pendingReopenings = 0
   let correctionsCount = 0
-  try {
-    const { count: rCount } = await supabase
-      .from('session_reopening_requests')
-      .select('*', { count: 'exact', head: true })
-      .eq('status', 'pending')
-    pendingReopenings = rCount || 0
-
-    const { count: cCount } = await supabase
-      .from('attendance_corrections')
-      .select('*', { count: 'exact', head: true })
-    correctionsCount = cCount || 0
-  } catch (err) {
-    console.warn('Audit count fetch notice:', err)
+  const { count: rCount, error: rErr } = await supabase
+    .from('session_reopening_requests')
+    .select('*', { count: 'exact', head: true })
+    .eq('status', 'pending')
+  if (rErr) {
+    throw new Error(`Database error fetching reopening requests: ${rErr.message}`)
   }
+  pendingReopenings = rCount || 0
+
+  const { count: cCount, error: cErr } = await supabase
+    .from('attendance_corrections')
+    .select('*', { count: 'exact', head: true })
+  if (cErr) {
+    throw new Error(`Database error fetching attendance corrections: ${cErr.message}`)
+  }
+  correctionsCount = cCount || 0
 
   return {
     reporting_year: year,

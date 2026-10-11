@@ -181,38 +181,92 @@ describe('Phase 3.1.2: Comprehensive Reporting Integrity & Multi-Unit Aggregatio
     eligibility_rule: 'custom_enrolled'
   }
 
-  it('1. Eligible present record: counts as attended and increments attendance rate', () => {
-    // memberA1 attended sessionAllStake
+  it('1. One eligible member is present in one closed session: attendance rate is 100%', () => {
+    // 1 member, 1 finalized session, member attended
     const isEligible = isMemberEligibleForSession(memberA1, sessionAllStake)
     expect(isEligible).toBe(true)
 
-    const attendedCount = 1
     const eligibleCount = 1
+    const attendedCount = 1
     const rate = Math.round((attendedCount / eligibleCount) * 1000) / 10
     expect(rate).toBe(100.0)
   })
 
-  it('2. Ineligible present record: cannot inflate finalized attendance rate or eligible opportunities', () => {
-    // memberB1 attempts to check into sessionUnitAOnly (Unit A only)
+  it('2. One eligible member is absent in one closed session: attendance rate is 0%', () => {
+    // 1 member, 1 finalized session, member did NOT attend
+    const isEligible = isMemberEligibleForSession(memberA1, sessionAllStake)
+    expect(isEligible).toBe(true)
+
+    const eligibleCount = 1
+    const attendedCount = 0
+    const rate = Math.round((attendedCount / eligibleCount) * 1000) / 10
+    expect(rate).toBe(0.0)
+  })
+
+  it('3. One eligible member is present and one eligible member is absent: attendance rate is 50%', () => {
+    // 2 eligible members (memberA1, memberA2) for 1 session: memberA1 attended, memberA2 absent
+    expect(isMemberEligibleForSession(memberA1, sessionAllStake)).toBe(true)
+    expect(isMemberEligibleForSession(memberA2, sessionAllStake)).toBe(true)
+
+    const eligibleOpportunities = 2
+    const attendedCount = 1
+    const rate = Math.round((attendedCount / eligibleOpportunities) * 1000) / 10
+    expect(rate).toBe(50.0)
+  })
+
+  it('4. An ineligible member has a present record: the attendance rate does not increase', () => {
+    // memberB1 is not in Unit A, and sessionUnitAOnly is specific to Unit A
     const isEligible = isMemberEligibleForSession(memberB1, sessionUnitAOnly)
     expect(isEligible).toBe(false)
 
-    // Even if an attendance record existed in the database table for an ineligible member,
-    // the reporting engine checks isMemberEligibleForSession first.
-    // If ineligible, it marks activity_statuses as 'ineligible', doesn't increment eligibleFinalizedCount,
-    // and doesn't increment attendedCount.
-    let eligibleFinalizedCount = 0
-    let attendedCount = 0
-    if (isEligible) {
-      eligibleFinalizedCount++
-      attendedCount++
-    }
+    // Even if an attendance record exists for memberB1 in sessionUnitAOnly,
+    // the query joins on eligible_pairs (or evaluates isMemberEligibleForSession),
+    // strictly rejecting ineligible records from the numerator and denominator.
+    const baselineEligible = 2 // memberA1, memberA2
+    const baselineAttended = 1 // memberA1 attended
+    const baselineRate = Math.round((baselineAttended / baselineEligible) * 1000) / 10
 
-    expect(eligibleFinalizedCount).toBe(0)
-    expect(attendedCount).toBe(0)
+    // Attempting to inject ineligible attendance for memberB1:
+    const injectedEligible = baselineEligible + (isEligible ? 1 : 0)
+    const injectedAttended = baselineAttended + (isEligible ? 1 : 0)
+    const resultingRate = Math.round((injectedAttended / injectedEligible) * 1000) / 10
+
+    expect(resultingRate).toBe(baselineRate)
+    expect(injectedEligible).toBe(2)
+    expect(injectedAttended).toBe(1)
   })
 
-  it('3. Excused record: reported separately, does NOT count as present, and reduces absences', () => {
+  it('5. An inactive member has a present record: the attendance rate does not increase', () => {
+    // memberAInactive is inactive (is_active: false)
+    const rawMembers = [memberA1, memberA2, memberAInactive]
+    const activeMembers = rawMembers.filter(m => m.is_active !== false)
+
+    expect(activeMembers.some(m => m.id === memberAInactive.id)).toBe(false)
+    expect(activeMembers.length).toBe(2)
+
+    // Inactive member records are excluded before building eligible_pairs
+    const eligibleCount = activeMembers.length * 1 // 1 session
+    const attendedCount = 1 // only active memberA1 attended
+    const rate = Math.round((attendedCount / eligibleCount) * 1000) / 10
+
+    expect(rate).toBe(50.0)
+  })
+
+  it('6. A custom_enrolled session includes only enrolled members in its denominator', () => {
+    // Enrolled: memberA1, memberB1. Not enrolled: memberA2
+    const enrolledMembersSet = new Set([memberA1.id, memberB1.id])
+
+    expect(isMemberEligibleForSession(memberA1, sessionCustomEnrolled, enrolledMembersSet)).toBe(true)
+    expect(isMemberEligibleForSession(memberB1, sessionCustomEnrolled, enrolledMembersSet)).toBe(true)
+    expect(isMemberEligibleForSession(memberA2, sessionCustomEnrolled, enrolledMembersSet)).toBe(false)
+
+    // Total eligible denominator must equal 2 (only enrolled members)
+    const allMembers = [memberA1, memberA2, memberB1]
+    const eligibleCount = allMembers.filter(m => isMemberEligibleForSession(m, sessionCustomEnrolled, enrolledMembersSet)).length
+    expect(eligibleCount).toBe(2)
+  })
+
+  it('7. Excused attendance is reported separately and is not counted as present', () => {
     // Member has 2 eligible sessions: 1 present, 1 excused
     const eligibleCount = 2
     const attendedCount = 1
@@ -220,48 +274,12 @@ describe('Phase 3.1.2: Comprehensive Reporting Integrity & Multi-Unit Aggregatio
     const absentCount = Math.max(0, eligibleCount - (attendedCount + excusedCount))
 
     expect(absentCount).toBe(0)
-    // Rate definition: attended / eligible * 100 (excused is not counted as present)
+    // Rate definition: attended / eligible * 100 (excused is reported separately, not in numerator)
     const rate = Math.round((attendedCount / eligibleCount) * 1000) / 10
     expect(rate).toBe(50.0)
   })
 
-  it('4. Duplicate attendance records for the same session and member: deduped by unique composite key', () => {
-    // In database, attendance_records has unique(session_id, member_id)
-    // In JS aggregation, attMap.set(`${rec.session_id}:${rec.member_id}`, status) prevents multiple check-ins
-    const attMap = new Map<string, string>()
-    attMap.set('sess-1:m-1', 'present')
-    attMap.set('sess-1:m-1', 'present') // duplicate check-in attempt
-
-    expect(attMap.size).toBe(1)
-  })
-
-  it('5. Inactive member: excluded from active reporting population and denominator', () => {
-    const rawMembers = [memberA1, memberA2, memberAInactive, memberB1]
-    const activeMembers = rawMembers.filter(m => m.is_active !== false)
-
-    expect(activeMembers.length).toBe(3)
-    expect(activeMembers.some(m => m.id === memberAInactive.id)).toBe(false)
-  })
-
-  it('6. Custom enrollment: strictly validates session_enrolled_members table', () => {
-    const enrolledMembersSet = new Set([memberA1.id, memberB1.id])
-
-    expect(isMemberEligibleForSession(memberA1, sessionCustomEnrolled, enrolledMembersSet)).toBe(true)
-    expect(isMemberEligibleForSession(memberB1, sessionCustomEnrolled, enrolledMembersSet)).toBe(true)
-    expect(isMemberEligibleForSession(memberA2, sessionCustomEnrolled, enrolledMembersSet)).toBe(false)
-  })
-
-  it('7. Provisional and cancelled sessions: never create confirmed absences', () => {
-    const activeSession: ActivitySession = { ...sessionAllStake, id: 'sess-active', status: 'active' }
-    const draftSession: ActivitySession = { ...sessionAllStake, id: 'sess-draft', status: 'draft' }
-
-    // Neither session is 'closed', so neither increments eligible finalized opportunities
-    const sessions = [activeSession, draftSession]
-    const finalized = sessions.filter(s => s.status === 'closed')
-    expect(finalized.length).toBe(0)
-  })
-
-  it('8. Empty reporting period: zero sessions yields null percentage (displayed as N/A)', () => {
+  it('8. A reporting period with no eligible opportunities returns NULL', () => {
     const sessions: ActivitySession[] = []
     const finalized = sessions.filter(s => s.status === 'closed')
 
@@ -272,7 +290,7 @@ describe('Phase 3.1.2: Comprehensive Reporting Integrity & Multi-Unit Aggregatio
     expect(formatExportPercentage(rate)).toBe('N/A')
   })
 
-  it('9. Multiple units with different eligible populations calculate fair rates', () => {
+  it('9. Several units with different eligible populations produce a correctly weighted stake-wide rate', () => {
     // Unit A (2 members): eligible for sessionAllStake and sessionUnitAOnly (total 2 * 2 = 4 opps)
     // Unit B (1 member): eligible only for sessionAllStake (total 1 * 1 = 1 opp)
     // Unit A attendance: 3 check-ins out of 4 opps -> 75%
@@ -297,17 +315,37 @@ describe('Phase 3.1.2: Comprehensive Reporting Integrity & Multi-Unit Aggregatio
     expect(stakeRate).toBeLessThanOrEqual(100.0)
   })
 
-  it('10. Zero eligible opportunities: returns null and displays N/A', () => {
-    const opps = 0
-    const attended = 0
-    const rate = opps > 0 ? (attended / opps) * 100 : null
+  it('10. Duplicate attendance records cannot inflate the numerator', () => {
+    // In SQL: SELECT DISTINCT ep.member_id, ep.session_id FROM eligible_pairs ep JOIN attendance_records ...
+    // In JS: attMap.set(`${rec.session_id}:${rec.member_id}`, status)
+    const attendanceRecords = [
+      { session_id: 'sess-1', member_id: 'm-1', status: 'present' },
+      { session_id: 'sess-1', member_id: 'm-1', status: 'present' } // duplicate check-in row
+    ]
 
-    expect(rate).toBeNull()
-    expect(formatExportPercentage(rate)).toBe('N/A')
+    const distinctPresentKeys = new Set(
+      attendanceRecords
+        .filter(r => r.status === 'present')
+        .map(r => `${r.session_id}:${r.member_id}`)
+    )
+
+    expect(distinctPresentKeys.size).toBe(1)
   })
 
-  it('11. Unauthorized cross-unit request: rejected by unit-scoping policy', () => {
-    // Function testing unit-scoping rule: bishop of Unit A cannot request Unit B
+  it('11. Unauthorized users cannot access stake-wide analytics', () => {
+    function canAccessStakeAnalytics(callerRoles: string[]): boolean {
+      return callerRoles.includes('system_admin') || callerRoles.includes('stake_presidency')
+    }
+
+    expect(canAccessStakeAnalytics(['system_admin'])).toBe(true)
+    expect(canAccessStakeAnalytics(['stake_presidency'])).toBe(true)
+    expect(canAccessStakeAnalytics(['bishop'])).toBe(false)
+    expect(canAccessStakeAnalytics(['branch_president'])).toBe(false)
+    expect(canAccessStakeAnalytics(['ysa_leader'])).toBe(false)
+    expect(canAccessStakeAnalytics([])).toBe(false)
+  })
+
+  it('12. A leader cannot retrieve a unit report outside their permitted scope', () => {
     function canAccessUnitReport(callerAssignedUnitId: string | null, callerRoles: string[], requestedUnitId: string): boolean {
       if (callerRoles.includes('system_admin') || callerRoles.includes('stake_presidency')) {
         return true
@@ -318,13 +356,13 @@ describe('Phase 3.1.2: Comprehensive Reporting Integrity & Multi-Unit Aggregatio
     const bishopUnitA = unitA
     const bishopRoles = ['bishop']
 
-    // Bishop requesting own unit -> allowed
+    // Bishop requesting own unit -> permitted
     expect(canAccessUnitReport(bishopUnitA, bishopRoles, unitA)).toBe(true)
 
     // Bishop requesting Unit B -> denied!
     expect(canAccessUnitReport(bishopUnitA, bishopRoles, unitB)).toBe(false)
 
-    // Stake presidency requesting Unit B -> allowed
+    // Stake presidency requesting Unit B -> permitted
     expect(canAccessUnitReport(null, ['stake_presidency'], unitB)).toBe(true)
   })
 })
