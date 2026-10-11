@@ -17,6 +17,13 @@ const AppRouter: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
+  const navigateTo = (path: string) => {
+    if (window.location.pathname !== path) {
+      window.history.pushState({}, '', path)
+    }
+    setCurrentPath(path)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -39,18 +46,25 @@ const AppRouter: React.FC = () => {
       return (
         <LeaderAdminLoginView
           onSuccess={() => {
-            // Once logged in, route will render AuthenticatedShell
-            setCurrentPath('/la')
+            const target = currentPath === '/la' || currentPath === '/la/' ? '/la/dashboard' : currentPath
+            navigateTo(target)
           }}
         />
       )
     }
-    // Authenticated leader/admin: display the authorized management console
-    return <AuthenticatedShell />
+
+    // Bare /la or /la/ redirects directly to /la/dashboard
+    if (currentPath === '/la' || currentPath === '/la/') {
+      navigateTo('/la/dashboard')
+      return <AuthenticatedShell currentSubpath="dashboard" onNavigate={navigateTo} />
+    }
+
+    // Extract subpath after /la/
+    const subpath = currentPath.substring(4)
+    return <AuthenticatedShell currentSubpath={subpath} onNavigate={navigateTo} />
   }
 
-  // If user is already authenticated and visits root '/', they can access the shell or public form
-  // But by default root '/' is the public YSA attendance interface
+  // Root '/' or any public attendance path renders public interface
   return <PublicAttendanceFormView />
 }
 
