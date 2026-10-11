@@ -25,9 +25,23 @@ export async function fetchActivities(): Promise<Activity[]> {
 }
 
 export async function createActivity(activity: Partial<Activity>): Promise<Activity> {
+  let createdBy = activity.created_by
+
+  if (!createdBy || createdBy === 'current-user') {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      createdBy = user.id
+    }
+  }
+
+  const payload = {
+    ...activity,
+    ...(createdBy && createdBy !== 'current-user' ? { created_by: createdBy } : {})
+  }
+
   const { data, error } = await supabase
     .from('activities')
-    .insert([activity])
+    .insert([payload])
     .select('*, creator_profile:user_profiles(full_name)')
     .single()
 
