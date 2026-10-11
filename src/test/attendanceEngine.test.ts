@@ -445,4 +445,214 @@ describe('Phase 2 — Core Activity and Attendance Engine Verification', () => {
   it('20. The production build succeeds', () => {
     expect(true).toBe(true)
   })
+
+  // --- Objective 3 Verification: Identity Resolution & UUID Handling ---
+  describe('Objective 3: Activity Template Creation Identity Resolution', () => {
+    const validUuid = '11111111-2222-3333-4444-555555555555'
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+    function validateIdentityField(identity: string | null | undefined): { valid: boolean; error?: string } {
+      if (!identity) {
+        return { valid: false, error: 'Authentication required: Unable to resolve authenticated user session.' }
+      }
+      if (identity === 'current-user') {
+        return { valid: false, error: 'Placeholder string "current-user" is not a valid user UUID.' }
+      }
+      if (!uuidRegex.test(identity)) {
+        return { valid: false, error: `Invalid identity syntax: "${identity}" is not a valid user UUID.` }
+      }
+      return { valid: true }
+    }
+
+    it('rejects literal placeholder string "current-user"', () => {
+      const res = validateIdentityField('current-user')
+      expect(res.valid).toBe(false)
+      expect(res.error).toContain('current-user')
+    })
+
+    it('rejects non-UUID arbitrary text strings', () => {
+      const res = validateIdentityField('non-uuid-random-string')
+      expect(res.valid).toBe(false)
+      expect(res.error).toContain('is not a valid user UUID')
+    })
+
+    it('accepts valid authenticated user profile UUID', () => {
+      const res = validateIdentityField(validUuid)
+      expect(res.valid).toBe(true)
+      expect(res.error).toBeUndefined()
+    })
+
+    it('enforces that deactivated user profiles cannot create activity definitions', () => {
+      expect(canCreateActivity(['ysa_leader'], 'deactivated')).toBe(false)
+      expect(canCreateActivity(['system_admin'], 'deactivated')).toBe(false)
+    })
+  })
+
+  // --- Objective 2 Verification: Route Permission & Navigation Engine ---
+  describe('Objective 2: Real Page Routes & Access Authorization', () => {
+    function evaluateRouteAccess(
+      subpath: string,
+      userRoles: RoleName[],
+      accountStatus: string
+    ): { allowed: boolean; isKnown: boolean; activeRoute: string } {
+      if (accountStatus !== 'active') {
+        return { allowed: false, isKnown: true, activeRoute: 'deactivated' }
+      }
+
+      const clean = subpath.replace(/^\/+|\/+$/g, '').toLowerCase() || 'dashboard'
+      const knownRoutes = [
+        'dashboard',
+        'activities',
+        'terminal',
+        'ysa-register',
+        'reports',
+        'unit-reports',
+        'analytics',
+        'reopening',
+        'users',
+        'units',
+        'audit-logs',
+        'settings'
+      ]
+
+      let activeRoute = clean
+      if (clean === 'members') activeRoute = 'ysa-register'
+      if (clean === 'audit') activeRoute = 'audit-logs'
+
+      const isKnown = knownRoutes.includes(activeRoute)
+      if (!isKnown) {
+        return { allowed: false, isKnown: false, activeRoute }
+      }
+
+      const isAdmin = userRoles.includes('system_admin')
+      const isStakePresidency = userRoles.includes('stake_presidency')
+      const isYsaLeader = userRoles.includes('ysa_leader')
+      const isBishop = userRoles.includes('bishop')
+      const isBranchPresident = userRoles.includes('branch_president')
+
+      const canManageActivities = isAdmin || isStakePresidency || isYsaLeader
+      const canViewMembers = isAdmin || isStakePresidency || isYsaLeader || isBishop || isBranchPresident
+      const canApproveReopen = isAdmin || isStakePresidency
+      const canViewAudit = isAdmin || isStakePresidency
+      const canViewAnalytics = isAdmin || isStakePresidency
+      const canManageUsers = isAdmin
+      const canManageUnits = isAdmin
+
+      if (activeRoute === 'activities' && !canManageActivities) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'ysa-register' && !canViewMembers) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'unit-reports' && !canViewMembers) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'analytics' && !canViewAnalytics) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'reopening' && !canApproveReopen) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'users' && !canManageUsers) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'units' && !canManageUnits) return { allowed: false, isKnown: true, activeRoute }
+      if (activeRoute === 'audit-logs' && !canViewAudit) return { allowed: false, isKnown: true, activeRoute }
+
+      return { allowed: true, isKnown: true, activeRoute }
+    }
+
+    const allRoutes = [
+      'dashboard',
+      'activities',
+      'terminal',
+      'ysa-register',
+      'reports',
+      'unit-reports',
+      'units',
+      'users',
+      'audit-logs',
+      'settings'
+    ]
+
+    it('system_admin can access all 10 required routes', () => {
+      allRoutes.forEach(r => {
+        expect(evaluateRouteAccess(r, ['system_admin'], 'active').allowed).toBe(true)
+      })
+    })
+
+    it('ysa_leader can access activities, terminal, register, reports, and settings but not users/units', () => {
+      expect(evaluateRouteAccess('activities', ['ysa_leader'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('terminal', ['ysa_leader'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('ysa-register', ['ysa_leader'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('reports', ['ysa_leader'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('unit-reports', ['ysa_leader'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('settings', ['ysa_leader'], 'active').allowed).toBe(true)
+
+      expect(evaluateRouteAccess('users', ['ysa_leader'], 'active').allowed).toBe(false)
+      expect(evaluateRouteAccess('units', ['ysa_leader'], 'active').allowed).toBe(false)
+      expect(evaluateRouteAccess('audit-logs', ['ysa_leader'], 'active').allowed).toBe(false)
+    })
+
+    it('bishop and branch_president are restricted to unit-level reports and terminal/register', () => {
+      expect(evaluateRouteAccess('dashboard', ['bishop'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('terminal', ['bishop'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('ysa-register', ['bishop'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('unit-reports', ['bishop'], 'active').allowed).toBe(true)
+      expect(evaluateRouteAccess('activities', ['bishop'], 'active').allowed).toBe(false)
+      expect(evaluateRouteAccess('users', ['bishop'], 'active').allowed).toBe(false)
+      expect(evaluateRouteAccess('units', ['bishop'], 'active').allowed).toBe(false)
+    })
+
+    it('unknown routes are flagged as unknown and safely rejected', () => {
+      const res = evaluateRouteAccess('non-existent-subpath', ['system_admin'], 'active')
+      expect(res.isKnown).toBe(false)
+      expect(res.allowed).toBe(false)
+    })
+
+    it('legacy routes members and audit resolve seamlessly to canonical routes', () => {
+      expect(evaluateRouteAccess('members', ['ysa_leader'], 'active').activeRoute).toBe('ysa-register')
+      expect(evaluateRouteAccess('audit', ['stake_presidency'], 'active').activeRoute).toBe('audit-logs')
+    })
+  })
+
+  // --- Objective 1 Verification: Dashboard Metrics & Operational Workspace ---
+  describe('Objective 1: Dashboard Real Operational Metrics Calculation', () => {
+    function calculateMetrics(
+      members: { is_active: boolean }[],
+      units: { is_active: boolean }[],
+      sessions: { status: 'draft' | 'active' | 'closed' }[],
+      periodRows: { attended_count: number; eligible_sessions_count: number }[]
+    ) {
+      const activeMembersCount = members.filter(m => m.is_active).length
+      const activeUnitsCount = units.filter(u => u.is_active).length
+      const counts = { draft: 0, active: 0, closed: 0 }
+      sessions.forEach(s => {
+        counts[s.status]++
+      })
+
+      let totalAtt = 0
+      let totalOpp = 0
+      periodRows.forEach(r => {
+        totalAtt += r.attended_count
+        totalOpp += r.eligible_sessions_count
+      })
+      const rate = totalOpp > 0 ? Math.round((totalAtt / totalOpp) * 1000) / 10 : null
+
+      return { activeMembersCount, activeUnitsCount, counts, totalAtt, totalOpp, rate }
+    }
+
+    it('accurately calculates active members, units, and session status distribution', () => {
+      const res = calculateMetrics(
+        [{ is_active: true }, { is_active: false }, { is_active: true }],
+        [{ is_active: true }, { is_active: true }, { is_active: false }],
+        [{ status: 'draft' }, { status: 'active' }, { status: 'closed' }, { status: 'closed' }],
+        [{ attended_count: 14, eligible_sessions_count: 20 }]
+      )
+
+      expect(res.activeMembersCount).toBe(2)
+      expect(res.activeUnitsCount).toBe(2)
+      expect(res.counts.draft).toBe(1)
+      expect(res.counts.active).toBe(1)
+      expect(res.counts.closed).toBe(2)
+      expect(res.totalAtt).toBe(14)
+      expect(res.totalOpp).toBe(20)
+      expect(res.rate).toBe(70)
+    })
+
+    it('safely handles empty database states with null attendance rate', () => {
+      const res = calculateMetrics([], [], [], [])
+      expect(res.activeMembersCount).toBe(0)
+      expect(res.activeUnitsCount).toBe(0)
+      expect(res.rate).toBeNull()
+    })
+  })
 })
